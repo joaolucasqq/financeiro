@@ -3,18 +3,19 @@ import pandas as pd
 import plotly.express as px
 import numpy as np
 
-# ================= CONFIG =================
+# ================= CONFIGURAÇÃO =================
 st.set_page_config(
     page_title="Sistema Financeiro Pessoal",
     page_icon="📊",
     layout="wide"
 )
 
-st.title("📊 Sistema Financeiro Pessoal — Elite")
-st.caption("Controle • Decisão • Futuro")
+st.title("📊 Sistema Financeiro Pessoal")
+st.caption("Controle • Planejamento • Decisão")
 
 # ================= DADOS BASE =================
 receita_mensal = 4500
+
 gastos = {
     "Faculdade": 500,
     "Cartão": 500,
@@ -28,119 +29,140 @@ gastos = {
 gastos_df = pd.DataFrame(gastos.items(), columns=["Categoria", "Valor"])
 total_gastos = gastos_df["Valor"].sum()
 saldo = receita_mensal - total_gastos
-taxa_poupanca = saldo / receita_mensal * 100
-
-# ================= KPIs =================
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("💰 Receita", f"R$ {receita_mensal:,.2f}")
-c2.metric("💸 Gastos", f"R$ {total_gastos:,.2f}")
-c3.metric("📉 Saldo", f"R$ {saldo:,.2f}")
-c4.metric("📈 Poupança", f"{taxa_poupanca:.1f}%")
-
-st.divider()
-
-# ================= 1️⃣ REGRA 50-30-20 =================
-st.subheader("1️⃣ Regra Financeira (50–30–20)")
-
-necessidades = gastos_df["Valor"].sum() * 0.6
-qualidade = gastos_df["Valor"].sum() * 0.25
-futuro = saldo
-
-regra_df = pd.DataFrame({
-    "Grupo": ["Necessidades", "Qualidade de Vida", "Futuro"],
-    "Valor": [necessidades, qualidade, futuro]
-})
-
-st.plotly_chart(px.pie(regra_df, names="Grupo", values="Valor"), use_container_width=True)
-
-# ================= 2️⃣ CUSTO DE VIDA REAL =================
-st.subheader("2️⃣ Custo de Vida Real")
+taxa_poupanca = (saldo / receita_mensal) * 100 if receita_mensal > 0 else 0
 
 custo_minimo = gastos_df[gastos_df["Categoria"] != "Lazer"]["Valor"].sum()
-meses_sobrevivencia = 30000 / custo_minimo
 
-st.metric("Custo mínimo mensal", f"R$ {custo_minimo:,.2f}")
-st.metric("Meses de sobrevivência (reserva)", f"{meses_sobrevivencia:.1f}")
+# ================= ABAS =================
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📊 Visão Geral",
+    "🎯 Metas & Planejamento",
+    "📈 Projeções",
+    "🚨 Crise & Riscos",
+    "⚙️ Configurações"
+])
 
-# ================= 3️⃣ LIBERDADE FINANCEIRA =================
-st.subheader("3️⃣ Tempo até Liberdade Financeira")
+# ================= 📊 VISÃO GERAL =================
+with tab1:
+    st.subheader("Resumo Atual")
 
-investimento_mensal = saldo
-rentabilidade = 0.07
-objetivo = custo_minimo * 12 / rentabilidade
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("💰 Receita", f"R$ {receita_mensal:,.2f}")
+    c2.metric("💸 Gastos", f"R$ {total_gastos:,.2f}")
+    c3.metric("📉 Saldo", f"R$ {saldo:,.2f}")
+    c4.metric("📈 Poupança", f"{taxa_poupanca:.1f}%")
 
-anos = np.arange(0, 30)
-patrimonio = [investimento_mensal * ((1 + rentabilidade) ** i - 1) / rentabilidade for i in anos]
+    st.divider()
 
-df_lib = pd.DataFrame({"Ano": anos, "Patrimônio": patrimonio})
-st.plotly_chart(px.line(df_lib, x="Ano", y="Patrimônio"), use_container_width=True)
+    st.subheader("Gastos por Categoria")
+    st.plotly_chart(
+        px.bar(gastos_df, x="Categoria", y="Valor", text_auto=True),
+        use_container_width=True
+    )
 
-# ================= 4️⃣ SIMULADOR DE DECISÕES =================
-st.subheader("4️⃣ Simulador de Decisões")
+    if saldo < 0:
+        st.error("🚨 Você está gastando mais do que ganha")
+    elif taxa_poupanca < 20:
+        st.warning("⚠️ Taxa de poupança abaixo de 20%")
+    else:
+        st.success("✅ Situação financeira saudável")
 
-extra = st.slider("Nova despesa mensal (R$)", 0, 2000, 0)
-novo_saldo = saldo - extra
-st.metric("Saldo após decisão", f"R$ {novo_saldo:,.2f}")
+# ================= 🎯 METAS & PLANEJAMENTO =================
+with tab2:
+    st.subheader("Metas Financeiras")
 
-# ================= 5️⃣ CARTÃO DE CRÉDITO =================
-st.subheader("5️⃣ Cartão de Crédito")
+    metas = pd.DataFrame({
+        "Meta": ["Reserva de Emergência", "Carro", "Apartamento"],
+        "Objetivo": [30000, 50000, 300000],
+        "Atual": [30000, 12000, 0]
+    })
 
-limite = 3000
-usado = gastos["Cartão"]
-percentual = usado / limite * 100
+    for _, row in metas.iterrows():
+        progresso = row["Atual"] / row["Objetivo"]
+        st.progress(
+            progresso,
+            text=f"{row['Meta']} — R$ {row['Atual']:,.0f} / R$ {row['Objetivo']:,.0f}"
+        )
 
-st.metric("Uso do cartão", f"{percentual:.1f}%")
-st.progress(min(percentual / 100, 1.0))
+    st.divider()
 
-# ================= 6️⃣ RENDA ATIVA x ESCALÁVEL =================
-st.subheader("6️⃣ Tipos de Renda")
+    st.subheader("Planejado x Real")
 
-renda_df = pd.DataFrame({
-    "Tipo": ["Ativa", "Escalável", "Passiva"],
-    "Valor": [4500, 0, 0]
-})
-st.plotly_chart(px.bar(renda_df, x="Tipo", y="Valor"), use_container_width=True)
+    planejado = {
+        "Faculdade": 500,
+        "Cartão": 450,
+        "Gasolina": 350,
+        "Academia": 150,
+        "Alimentação": 550,
+        "Assinaturas": 100,
+        "Lazer": 250
+    }
 
-# ================= 7️⃣ SEGURANÇA FINANCEIRA =================
-st.subheader("7️⃣ Índice de Segurança Financeira")
+    plan_df = pd.DataFrame({
+        "Categoria": planejado.keys(),
+        "Planejado": planejado.values(),
+        "Real": gastos_df.set_index("Categoria").loc[planejado.keys(), "Valor"].values
+    })
 
-indice = 0
-if meses_sobrevivencia >= 6: indice += 40
-if taxa_poupanca >= 20: indice += 30
-if percentual <= 30: indice += 30
+    st.plotly_chart(
+        px.bar(plan_df, x="Categoria", y=["Planejado", "Real"], barmode="group"),
+        use_container_width=True
+    )
 
-st.metric("Índice de Segurança (0–100)", indice)
+# ================= 📈 PROJEÇÕES =================
+with tab3:
+    st.subheader("Liberdade Financeira")
 
-# ================= 8️⃣ LINHA DO TEMPO DA VIDA =================
-st.subheader("8️⃣ Linha do Tempo da Vida")
+    investimento_mensal = max(saldo, 0)
+    rentabilidade = 0.07
 
-vida_df = pd.DataFrame({
-    "Evento": ["Casamento", "Filhos", "Imóvel"],
-    "Ano": [2027, 2029, 2032]
-})
-st.dataframe(vida_df, use_container_width=True)
+    anos = list(range(0, 31))
+    patrimonio = [
+        investimento_mensal * ((1 + rentabilidade)**i - 1) / rentabilidade if i > 0 else 0
+        for i in anos
+    ]
 
-# ================= 9️⃣ AUDITORIA DE ASSINATURAS =================
-st.subheader("9️⃣ Auditoria de Assinaturas")
+    proj_df = pd.DataFrame({
+        "Ano": anos,
+        "Patrimônio": patrimonio
+    })
 
-assinaturas = pd.DataFrame({
-    "Serviço": ["Spotify", "Netflix", "Cloud"],
-    "Mensal": [34, 55, 31]
-})
-assinaturas["Anual"] = assinaturas["Mensal"] * 12
-st.dataframe(assinaturas, use_container_width=True)
+    st.plotly_chart(
+        px.line(proj_df, x="Ano", y="Patrimônio", markers=True),
+        use_container_width=True
+    )
 
-# ================= 🔟 MODO CRISE =================
-st.subheader("🔟 Modo Crise")
+    objetivo_liberdade = custo_minimo * 12 / rentabilidade
+    st.metric("Patrimônio para Liberdade Financeira", f"R$ {objetivo_liberdade:,.0f}")
 
-queda = st.slider("Queda de renda (%)", 0, 60, 30)
-nova_renda = receita_mensal * (1 - queda / 100)
-novo_saldo_crise = nova_renda - custo_minimo
+# ================= 🚨 CRISE & RISCOS =================
+with tab4:
+    st.subheader("Modo Crise")
 
-st.metric("Saldo em crise", f"R$ {novo_saldo_crise:,.2f}")
+    queda = st.slider("Queda de renda (%)", 0, 70, 30)
+    nova_renda = receita_mensal * (1 - queda / 100)
+    saldo_crise = nova_renda - custo_minimo
 
-if novo_saldo_crise < 0:
-    st.error("Risco financeiro severo")
-else:
-    st.success("Você sobrevive ao cenário")
+    c1, c2 = st.columns(2)
+    c1.metric("Nova Renda", f"R$ {nova_renda:,.2f}")
+    c2.metric("Saldo em Crise", f"R$ {saldo_crise:,.2f}")
 
+    if saldo_crise < 0:
+        st.error("🚨 Você entra no negativo nesse cenário")
+    else:
+        st.success("✅ Você sobrevive ao cenário")
+
+# ================= ⚙️ CONFIGURAÇÕES =================
+with tab5:
+    st.subheader("Configurações (base para evoluir)")
+
+    st.info(
+        "Esta aba é a base para transformar o dashboard em app completo:\n\n"
+        "- Editar renda\n"
+        "- Editar metas\n"
+        "- Ajustar limites\n"
+        "- Conectar banco ou Google Sheets\n"
+        "- Criar login\n"
+    )
+
+    st.write("Versão: 1.0 — Estrutura Profissional")
