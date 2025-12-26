@@ -1,128 +1,146 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import numpy as np
 
 # ================= CONFIG =================
 st.set_page_config(
-    page_title="Dashboard Financeiro Pessoal",
+    page_title="Sistema Financeiro Pessoal",
     page_icon="📊",
     layout="wide"
 )
 
-st.title("📊 Dashboard Financeiro Pessoal")
-st.caption("Controle, decisão e visão de longo prazo")
+st.title("📊 Sistema Financeiro Pessoal — Elite")
+st.caption("Controle • Decisão • Futuro")
 
-# ================= DADOS =================
-dados = [
-    {"Mes": "Jan", "Tipo": "Receita", "Categoria": "Salário", "Valor": 2000},
-    {"Mes": "Jan", "Tipo": "Receita", "Categoria": "Pensão", "Valor": 2000},
+# ================= DADOS BASE =================
+receita_mensal = 4500
+gastos = {
+    "Faculdade": 500,
+    "Cartão": 500,
+    "Gasolina": 400,
+    "Academia": 150,
+    "Alimentação": 600,
+    "Assinaturas": 120,
+    "Lazer": 300
+}
 
-    {"Mes": "Jan", "Tipo": "Gasto", "Categoria": "Faculdade", "Valor": 500, "Planejado": 500},
-    {"Mes": "Jan", "Tipo": "Gasto", "Categoria": "Cartão", "Valor": 500, "Planejado": 450},
-    {"Mes": "Jan", "Tipo": "Gasto", "Categoria": "Gasolina", "Valor": 400, "Planejado": 350},
-    {"Mes": "Jan", "Tipo": "Gasto", "Categoria": "Academia", "Valor": 150, "Planejado": 150},
-    {"Mes": "Jan", "Tipo": "Gasto", "Categoria": "Outros", "Valor": 300, "Planejado": 250},
-]
-
-df = pd.DataFrame(dados)
+gastos_df = pd.DataFrame(gastos.items(), columns=["Categoria", "Valor"])
+total_gastos = gastos_df["Valor"].sum()
+saldo = receita_mensal - total_gastos
+taxa_poupanca = saldo / receita_mensal * 100
 
 # ================= KPIs =================
-receita = df[df["Tipo"] == "Receita"]["Valor"].sum()
-gastos = df[df["Tipo"] == "Gasto"]["Valor"].sum()
-saldo = receita - gastos
-taxa_poupanca = (saldo / receita) * 100 if receita > 0 else 0
-
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("💰 Receita", f"R$ {receita:,.2f}")
-col2.metric("💸 Gastos", f"R$ {gastos:,.2f}")
-col3.metric("📉 Saldo", f"R$ {saldo:,.2f}")
-col4.metric("📈 Poupança", f"{taxa_poupanca:.1f}%")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("💰 Receita", f"R$ {receita_mensal:,.2f}")
+c2.metric("💸 Gastos", f"R$ {total_gastos:,.2f}")
+c3.metric("📉 Saldo", f"R$ {saldo:,.2f}")
+c4.metric("📈 Poupança", f"{taxa_poupanca:.1f}%")
 
 st.divider()
 
-# ================= METAS =================
-st.subheader("🎯 Metas Financeiras")
+# ================= 1️⃣ REGRA 50-30-20 =================
+st.subheader("1️⃣ Regra Financeira (50–30–20)")
 
-metas = pd.DataFrame({
-    "Meta": ["Reserva Emergência", "Carro", "Apartamento"],
-    "Total": [30000, 50000, 300000],
-    "Atual": [30000, 12000, 0]
+necessidades = gastos_df["Valor"].sum() * 0.6
+qualidade = gastos_df["Valor"].sum() * 0.25
+futuro = saldo
+
+regra_df = pd.DataFrame({
+    "Grupo": ["Necessidades", "Qualidade de Vida", "Futuro"],
+    "Valor": [necessidades, qualidade, futuro]
 })
 
-for _, row in metas.iterrows():
-    progresso = row["Atual"] / row["Total"]
-    st.progress(progresso, text=f"{row['Meta']} — R$ {row['Atual']:,.0f} / R$ {row['Total']:,.0f}")
+st.plotly_chart(px.pie(regra_df, names="Grupo", values="Valor"), use_container_width=True)
 
-st.divider()
+# ================= 2️⃣ CUSTO DE VIDA REAL =================
+st.subheader("2️⃣ Custo de Vida Real")
 
-# ================= PLANEJADO x REAL =================
-st.subheader("📊 Planejado x Real")
+custo_minimo = gastos_df[gastos_df["Categoria"] != "Lazer"]["Valor"].sum()
+meses_sobrevivencia = 30000 / custo_minimo
 
-gastos_cat = df[df["Tipo"] == "Gasto"].groupby("Categoria").sum().reset_index()
+st.metric("Custo mínimo mensal", f"R$ {custo_minimo:,.2f}")
+st.metric("Meses de sobrevivência (reserva)", f"{meses_sobrevivencia:.1f}")
 
-fig_plan = px.bar(
-    gastos_cat,
-    x="Categoria",
-    y=["Planejado", "Valor"],
-    barmode="group",
-    title="Orçamento x Gasto Real"
-)
-st.plotly_chart(fig_plan, use_container_width=True)
+# ================= 3️⃣ LIBERDADE FINANCEIRA =================
+st.subheader("3️⃣ Tempo até Liberdade Financeira")
 
-st.divider()
+investimento_mensal = saldo
+rentabilidade = 0.07
+objetivo = custo_minimo * 12 / rentabilidade
 
-# ================= HISTÓRICO =================
-st.subheader("📈 Evolução Financeira")
+anos = np.arange(0, 30)
+patrimonio = [investimento_mensal * ((1 + rentabilidade) ** i - 1) / rentabilidade for i in anos]
 
-historico = pd.DataFrame({
-    "Mês": ["Out", "Nov", "Dez", "Jan"],
-    "Receita": [3500, 3800, 4000, receita],
-    "Gastos": [3000, 3200, 3300, gastos]
+df_lib = pd.DataFrame({"Ano": anos, "Patrimônio": patrimonio})
+st.plotly_chart(px.line(df_lib, x="Ano", y="Patrimônio"), use_container_width=True)
+
+# ================= 4️⃣ SIMULADOR DE DECISÕES =================
+st.subheader("4️⃣ Simulador de Decisões")
+
+extra = st.slider("Nova despesa mensal (R$)", 0, 2000, 0)
+novo_saldo = saldo - extra
+st.metric("Saldo após decisão", f"R$ {novo_saldo:,.2f}")
+
+# ================= 5️⃣ CARTÃO DE CRÉDITO =================
+st.subheader("5️⃣ Cartão de Crédito")
+
+limite = 3000
+usado = gastos["Cartão"]
+percentual = usado / limite * 100
+
+st.metric("Uso do cartão", f"{percentual:.1f}%")
+st.progress(min(percentual / 100, 1.0))
+
+# ================= 6️⃣ RENDA ATIVA x ESCALÁVEL =================
+st.subheader("6️⃣ Tipos de Renda")
+
+renda_df = pd.DataFrame({
+    "Tipo": ["Ativa", "Escalável", "Passiva"],
+    "Valor": [4500, 0, 0]
 })
-historico["Saldo"] = historico["Receita"] - historico["Gastos"]
+st.plotly_chart(px.bar(renda_df, x="Tipo", y="Valor"), use_container_width=True)
 
-fig_hist = px.line(
-    historico,
-    x="Mês",
-    y=["Receita", "Gastos", "Saldo"],
-    markers=True
-)
-st.plotly_chart(fig_hist, use_container_width=True)
+# ================= 7️⃣ SEGURANÇA FINANCEIRA =================
+st.subheader("7️⃣ Índice de Segurança Financeira")
 
-st.divider()
+indice = 0
+if meses_sobrevivencia >= 6: indice += 40
+if taxa_poupanca >= 20: indice += 30
+if percentual <= 30: indice += 30
 
-# ================= SCORE FINANCEIRO =================
-st.subheader("🏆 Score Financeiro")
+st.metric("Índice de Segurança (0–100)", indice)
 
-score = 0
-if taxa_poupanca >= 20: score += 30
-if saldo > 0: score += 20
-if gastos <= receita * 0.8: score += 20
-if metas.loc[0, "Atual"] >= metas.loc[0, "Total"]: score += 30
+# ================= 8️⃣ LINHA DO TEMPO DA VIDA =================
+st.subheader("8️⃣ Linha do Tempo da Vida")
 
-st.metric("Score Financeiro (0–100)", score)
+vida_df = pd.DataFrame({
+    "Evento": ["Casamento", "Filhos", "Imóvel"],
+    "Ano": [2027, 2029, 2032]
+})
+st.dataframe(vida_df, use_container_width=True)
 
-if score >= 80:
-    st.success("Excelente controle financeiro")
-elif score >= 60:
-    st.warning("Bom, mas pode melhorar")
+# ================= 9️⃣ AUDITORIA DE ASSINATURAS =================
+st.subheader("9️⃣ Auditoria de Assinaturas")
+
+assinaturas = pd.DataFrame({
+    "Serviço": ["Spotify", "Netflix", "Cloud"],
+    "Mensal": [34, 55, 31]
+})
+assinaturas["Anual"] = assinaturas["Mensal"] * 12
+st.dataframe(assinaturas, use_container_width=True)
+
+# ================= 🔟 MODO CRISE =================
+st.subheader("🔟 Modo Crise")
+
+queda = st.slider("Queda de renda (%)", 0, 60, 30)
+nova_renda = receita_mensal * (1 - queda / 100)
+novo_saldo_crise = nova_renda - custo_minimo
+
+st.metric("Saldo em crise", f"R$ {novo_saldo_crise:,.2f}")
+
+if novo_saldo_crise < 0:
+    st.error("Risco financeiro severo")
 else:
-    st.error("Risco financeiro — ajuste urgente")
+    st.success("Você sobrevive ao cenário")
 
-st.divider()
-
-# ================= ALERTAS =================
-st.subheader("🚨 Alertas Inteligentes")
-
-if gastos > receita:
-    st.error("Você gastou mais do que ganhou!")
-if taxa_poupanca < 20:
-    st.warning("Taxa de poupança abaixo do ideal (20%)")
-if gastos_cat["Valor"].max() > gastos_cat["Planejado"].max():
-    st.warning("Alguma categoria estourou o orçamento")
-
-st.divider()
-
-# ================= TABELA =================
-st.subheader("📋 Lançamentos Financeiros")
-st.dataframe(df, use_container_width=True)
