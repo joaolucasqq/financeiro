@@ -5,9 +5,7 @@ from datetime import date
 import gspread
 from google.oauth2.service_account import Credentials
 
-# -------------------------------------------------
-# CONFIGURAÇÕES
-# -------------------------------------------------
+# ---------------- CONFIG ----------------
 st.set_page_config(page_title="Financeiro Pessoal", layout="wide")
 
 SCOPE = [
@@ -17,9 +15,7 @@ SCOPE = [
 
 SHEET_ID = "1sFMHJSj7zbpLn73n7QILqmGG3CLL98rXTm9Et9QKFMA"
 
-# -------------------------------------------------
-# GOOGLE SHEETS
-# -------------------------------------------------
+# ---------------- GOOGLE ----------------
 @st.cache_resource
 def conectar_google():
     creds = Credentials.from_service_account_info(
@@ -30,20 +26,36 @@ def conectar_google():
 
 client = conectar_google()
 sheet = client.open_by_key(SHEET_ID)
-
 ws_lanc = sheet.worksheet("lancamentos")
-ws_cart = sheet.worksheet("cartoes")
-ws_orc  = sheet.worksheet("orcamentos")
 ws_meta = sheet.worksheet("metas")
 
-# -------------------------------------------------
-# LOADERS
-# -------------------------------------------------
+# ---------------- LOADERS ----------------
 @st.cache_data(ttl=30)
 def load_lancamentos():
-    df = pd.DataFrame(ws_lanc.get_all_records())
-    if df.empty:
-        return df
+    records = ws_lanc.get_all_records()
+
+    # 🚨 planilha vazia
+    if not records:
+        return pd.DataFrame(columns=[
+            "data", "tipo", "categoria", "conta",
+            "descricao", "valor", "fixo",
+            "pagamento", "observacao"
+        ])
+
+    df = pd.DataFrame(records)
+
+    # 🔒 normaliza nomes de colunas
+    df.columns = (
+        df.columns
+        .str.strip()
+        .str.lower()
+    )
+
+    # garante colunas mínimas
+    required = ["data", "tipo", "categoria", "conta", "descricao", "valor"]
+    for col in required:
+        if col not in df.columns:
+            df[col] = None
 
     df["data"] = pd.to_datetime(df["data"], errors="coerce").dt.date
     df["valor"] = pd.to_numeric(df["valor"], errors="coerce").fillna(0.0)
@@ -55,9 +67,12 @@ def load_lancamentos():
 
 @st.cache_data(ttl=30)
 def load_metas():
-    df = pd.DataFrame(ws_meta.get_all_records())
-    if df.empty:
-        return df
+    records = ws_meta.get_all_records()
+    if not records:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(records)
+    df.columns = df.columns.str.strip().str.lower()
 
     df["valor_meta"] = pd.to_numeric(df["valor_meta"], errors="coerce").fillna(0.0)
     df["inicio"] = pd.to_datetime(df["inicio"], errors="coerce").dt.date
@@ -66,9 +81,7 @@ def load_metas():
 
     return df
 
-# -------------------------------------------------
-# WRITER
-# -------------------------------------------------
+# ---------------- WRITER ----------------
 def salvar_lancamento(d):
     ws_lanc.append_row([
         str(d["data"]),
@@ -84,60 +97,58 @@ def salvar_lancamento(d):
 
     load_lancamentos.clear()
 
-# -------------------------------------------------
-# CÁLCULOS
-# -------------------------------------------------
+# ---------------- CÁLCULOS ----------------
 def calcular_kpis(df, inicio, fim):
-    base = df[(df["data"] >= inicio) & (df["data"] <= fim)]
-    receita = base[base["tipo"] == "receita"]["valor"].sum()
-    despesa = base[base["tipo"] == "despesa"]["valor"].sum()
+    if df.empty:
+        return 0.0, 0.0, 0.0
+
+    f = df[(df["data"] >= inicio) & (df["data"] <= fim)]
+    receita = f[f["tipo"] == "receita"]["valor"].sum()
+    despesa = f[f["tipo"] == "despesa"]["valor"].sum()
     saldo = receita - despesa
     return receita, despesa, saldo
 
 def progresso_meta(meta, df):
+    if df.empty:
+        return 0.0
+
     periodo = (df["data"] >= meta["inicio"]) & (df["data"] <= meta["fim"])
     base = df[periodo]
 
     if meta["tipo"] == "receita":
-        atual = base[base["tipo"] == "receita"]["valor"].sum()
+        return base[base["tipo"] == "receita"]["valor"].sum()
 
-    elif meta["tipo"] == "gasto":
-        atual = base[base["tipo"] == "despesa"]["valor"].sum()
+    if meta["tipo"] == "gasto":
+        return base[base["tipo"] == "despesa"]["valor"].sum()
 
-    elif meta["tipo"] == "economia":
+    if meta["tipo"] == "economia":
         r = base[base["tipo"] == "receita"]["valor"].sum()
         d = base[base["tipo"] == "despesa"]["valor"].sum()
-        atual = r - d
+        return r - d
 
-    else:
-        atual = 0
+    return 0.0
 
-    return max(atual, 0)
-
-# -------------------------------------------------
-# APP
-# -------------------------------------------------
+# ---------------- APP ----------------
 st.title("💸 Dashboard Financeiro Pessoal")
 
 df = load_lancamentos()
-
-if df.empty:
-    st.warning("Nenhum lançamento encontrado na planilha.")
-    st.stop()
 
 # ---------------- SIDEBAR ----------------
 with st.sidebar:
     st.header("📅 Filtros")
 
-    inicio = st.date_input("Início", min(df["data"]))
-    fim = st.date_input("Fim", max(df["data"]))
+    if df.empty:
+        st.info("Nenhum lançamento ainda.")
+        inicio = fim = date.today()
+    else:
+        inicio = st.date_input("Início", min(df["data"]))
+        fim = st.date_input("Fim", max(df["data"]))
 
 # ---------------- TABS ----------------
 tab_dash, tab_add, tab_meta, tab_data = st.tabs(
     ["📊 Dashboard", "➕ Novo lançamento", "🎯 Metas", "🗂️ Dados"]
 )
 
-# ---------------- DASHBOARD ----------------
 with tab_dash:
     receita, despesa, saldo = calcular_kpis(df, inicio, fim)
 
@@ -148,21 +159,12 @@ with tab_dash:
 
     st.divider()
 
-    st.subheader("📈 Saldo acumulado")
-    dff = df.sort_values("data")
-    dff["mov"] = np.where(dff["tipo"] == "receita", dff["valor"], -dff["valor"])
-    dff["saldo"] = dff["mov"].cumsum()
-    st.line_chart(dff.set_index("data")["saldo"])
+    if not df.empty:
+        dff = df.sort_values("data")
+        dff["mov"] = np.where(dff["tipo"] == "receita", dff["valor"], -dff["valor"])
+        dff["saldo"] = dff["mov"].cumsum()
+        st.line_chart(dff.set_index("data")["saldo"])
 
-    st.subheader("📊 Gastos por categoria")
-    gastos = (
-        df[df["tipo"] == "despesa"]
-        .groupby("categoria")["valor"]
-        .sum()
-    )
-    st.bar_chart(gastos)
-
-# ---------------- NOVO LANÇAMENTO ----------------
 with tab_add:
     st.subheader("➕ Novo lançamento")
 
@@ -189,27 +191,23 @@ with tab_add:
                 "pagamento": pagamento,
                 "observacao": observacao
             })
-            st.success("Lançamento salvo na planilha ✅")
+            st.success("Lançamento salvo ✅")
             st.rerun()
 
-# ---------------- METAS ----------------
 with tab_meta:
-    st.subheader("🎯 Progresso das metas")
+    st.subheader("🎯 Metas")
 
     df_metas = load_metas()
-
     if df_metas.empty:
         st.info("Nenhuma meta cadastrada.")
     else:
         for _, meta in df_metas.iterrows():
             atual = progresso_meta(meta, df)
             pct = min(atual / meta["valor_meta"], 1)
-
             st.markdown(f"### {meta['descricao']}")
             st.progress(pct)
             st.caption(f"R$ {atual:,.2f} / R$ {meta['valor_meta']:,.2f}")
 
-# ---------------- DADOS ----------------
 with tab_data:
     st.subheader("📋 Lançamentos")
     st.dataframe(df.sort_values("data", ascending=False), use_container_width=True)
