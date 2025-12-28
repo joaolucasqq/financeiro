@@ -1,183 +1,58 @@
-# app.py
-import os
-from datetime import datetime, date, timedelta
+import streamlit as st
 import pandas as pd
 import numpy as np
-import streamlit as st
+from datetime import date, timedelta
+import gspread
+from google.oauth2.service_account import Credentials
 
+# ---------------- CONFIG ----------------
 st.set_page_config(page_title="Financeiro Pessoal", layout="wide")
 
-DATA_DIR = "data"
-TX_PATH = os.path.join(DATA_DIR, "transactions.csv")
-BUDGET_PATH = os.path.join(DATA_DIR, "budgets.csv")
-CC_PATH = os.path.join(DATA_DIR, "credit_cards.csv")
+SCOPE = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
-REQUIRED_COLS = ["date", "type", "category", "account", "description", "amount"]
+SHEET_ID = "1sFMHJSj7zbpLn73n7QILqmGG3CLL98rXTm9Et9QKFMA"
 
 DEFAULT_CATEGORIES = [
     "Moradia", "Contas", "Mercado", "Transporte", "Saúde", "Lazer",
     "Educação", "Assinaturas", "Pets", "Roupas", "Presentes", "Outros"
 ]
-
 DEFAULT_ACCOUNTS = ["Conta Principal", "Poupança", "Carteira", "Investimentos"]
 DEFAULT_TYPES = ["income", "expense"]
 
-def ensure_storage():
-    os.makedirs(DATA_DIR, exist_ok=True)
-    if not os.path.exists(TX_PATH):
-        df = pd.DataFrame(columns=REQUIRED_COLS + ["fixed", "payment_method", "notes"])
-        df.to_csv(TX_PATH, index=False)
-    if not os.path.exists(BUDGET_PATH):
-        # budgets: month (YYYY-MM), category, budget_amount
-        dfb = pd.DataFrame(columns=["month", "category", "budget_amount"])
-        dfb.to_csv(BUDGET_PATH, index=False)
-    if not os.path.exists(CC_PATH):
-        # credit cards config: name, closing_day (1-28), due_day (1-28), limit
-        dfc = pd.DataFrame(
-            [{"name": "Cartão Principal", "closing_day": 10, "due_day": 17, "limit": 5000}]
-        )
-        dfc.to_csv(CC_PATH, index=False)
+# ---------------- GOOGLE SHEETS ----------------
+@st.cache_resource
+def connect_gsheets():
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=SCOPE
+    )
+    return gspread.authorize(creds)
 
-def load_transactions():
-    ensure_storage()
-    df = pd.read_csv(TX_PATH)
-    if df.empty:
-        return df
-    # parse date
-    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
-    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
-    df["type"] = df["type"].astype(str).str.lower()
-    # normalize
-    df = df[df["type"].isin(DEFAULT_TYPES)].copy()
-    return df
+client = connect_gsheets()
+sheet = client.open_by_key(SHEET_ID)
 
-def save_transactions(df: pd.DataFrame):
-    df2 = df.copy()
-    df2["date"] = pd.to_datetime(df2["date"]).dt.strftime("%Y-%m-%d")
-    df2.to_csv(TX_PATH, index=False)
+# ⚠️ Ajuste aqui caso suas abas tenham nomes diferentes
+ws_tx = sheet.worksheet("transactions")
+ws_budget = sheet.worksheet("budgets")
+ws_cc = sheet.worksheet("credit_cards")
 
-def load_budgets():
-    ensure_storage()
-    dfb = pd.read_csv(BUDGET_PATH)
-    if dfb.empty:
-        return dfb
-    dfb["budget_amount"] = pd.to_numeric(dfb["budget_amount"], errors="coerce").fillna(0.0)
-    dfb["month"] = dfb["month"].astype(str)
-    dfb["category"] = dfb["category"].astype(str)
-    return dfb
-
-def save_budgets(dfb: pd.DataFrame):
-    dfb.to_csv(BUDGET_PATH, index=False)
-
-def load_credit_cards():
-    ensure_storage()
-    dfc = pd.read_csv(CC_PATH)
-    if dfc.empty:
-        dfc = pd.DataFrame(columns=["name", "closing_day", "due_day", "limit"])
-    dfc["closing_day"] = pd.to_numeric(dfc["closing_day"], errors="coerce").fillna(10).astype(int)
-    dfc["due_day"] = pd.to_numeric(dfc["due_day"], errors="coerce").fillna(17).astype(int)
-    dfc["limit"] = pd.to_numeric(dfc["limit"], errors="coerce").fillna(0.0)
-    return dfc
-
-def save_credit_cards(dfc: pd.DataFrame):
-    dfc.to_csv(CC_PATH, index=False)
-
+# ---------------- HELPERS ----------------
 def month_key(d: date) -> str:
     return f"{d.year:04d}-{d.month:02d}"
 
-def to_month_start(d: date) -> date:
-    return date(d.year, d.month, 1)
-
 def add_months(d: date, months: int) -> date:
-    # safe month add
     y = d.year + (d.month - 1 + months) // 12
     m = (d.month - 1 + months) % 12 + 1
-    day = min(d.day, [31,29 if (y%4==0 and (y%100!=0 or y%400==0)) else 28,31,30,31,30,31,31,30,31,30,31][m-1])
+    days_in_month = [31, 29 if (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)) else 28,
+                     31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]
+    day = min(d.day, days_in_month)
     return date(y, m, day)
 
-def compute_kpis(df: pd.DataFrame, start: date, end: date):
-    if df.empty:
-        return 0.0, 0.0, 0.0, 0.0
-    mask = (df["date"] >= start) & (df["date"] <= end)
-    dff = df.loc[mask].copy()
-    income = dff.loc[dff["type"] == "income", "amount"].sum()
-    expense = dff.loc[dff["type"] == "expense", "amount"].sum()
-    net = income - expense
-    # saldo acumulado: assume que "income" soma e "expense" subtrai
-    df_sorted = df.sort_values("date").copy()
-    df_sorted["signed"] = np.where(df_sorted["type"] == "income", df_sorted["amount"], -df_sorted["amount"])
-    df_sorted["balance"] = df_sorted["signed"].cumsum()
-    # saldo no final do período (último dia <= end)
-    df_end = df_sorted[df_sorted["date"] <= end]
-    balance_end = float(df_end["balance"].iloc[-1]) if not df_end.empty else 0.0
-    return float(income), float(expense), float(net), float(balance_end)
-
-def chart_balance(df: pd.DataFrame, start: date, end: date):
-    if df.empty:
-        st.info("Sem lançamentos para plotar.")
-        return
-    dff = df.sort_values("date").copy()
-    dff["signed"] = np.where(dff["type"] == "income", dff["amount"], -dff["amount"])
-    dff["balance"] = dff["signed"].cumsum()
-    mask = (dff["date"] >= start) & (dff["date"] <= end)
-    dplot = dff.loc[mask, ["date", "balance"]].copy()
-    if dplot.empty:
-        st.info("Sem dados no período para saldo acumulado.")
-        return
-    st.line_chart(dplot.set_index("date"))
-
-def chart_monthly(df: pd.DataFrame, start: date, end: date):
-    if df.empty:
-        st.info("Sem lançamentos para plotar.")
-        return
-    mask = (df["date"] >= start) & (df["date"] <= end)
-    dff = df.loc[mask].copy()
-    if dff.empty:
-        st.info("Sem dados no período.")
-        return
-    dff["month"] = pd.to_datetime(dff["date"]).dt.to_period("M").astype(str)
-    pivot = dff.pivot_table(index="month", columns="type", values="amount", aggfunc="sum", fill_value=0).reset_index()
-    pivot = pivot.sort_values("month")
-    st.bar_chart(pivot.set_index("month"))
-
-def chart_categories(df: pd.DataFrame, start: date, end: date, only_expenses=True):
-    if df.empty:
-        st.info("Sem lançamentos para plotar.")
-        return
-    mask = (df["date"] >= start) & (df["date"] <= end)
-    dff = df.loc[mask].copy()
-    if only_expenses:
-        dff = dff[dff["type"] == "expense"]
-    if dff.empty:
-        st.info("Sem dados para categorias.")
-        return
-    cat = dff.groupby("category", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
-    st.write(cat)
-    # Streamlit não tem pizza nativo, mas dá pra mostrar como tabela e usar bar_chart
-    st.bar_chart(cat.set_index("category"))
-
-def compute_budget_status(df: pd.DataFrame, dfb: pd.DataFrame, month: str):
-    if df.empty or dfb.empty:
-        return pd.DataFrame(columns=["category", "budget_amount", "spent", "remaining", "pct_used"])
-    budgets = dfb[dfb["month"] == month].copy()
-    if budgets.empty:
-        return pd.DataFrame(columns=["category", "budget_amount", "spent", "remaining", "pct_used"])
-    # gastos do mês
-    dfm = df.copy()
-    dfm["month"] = pd.to_datetime(dfm["date"]).dt.to_period("M").astype(str)
-    dfm = dfm[(dfm["month"] == month) & (dfm["type"] == "expense")]
-    spent = dfm.groupby("category", as_index=False)["amount"].sum().rename(columns={"amount": "spent"})
-    out = budgets.merge(spent, on="category", how="left")
-    out["spent"] = out["spent"].fillna(0.0)
-    out["remaining"] = out["budget_amount"] - out["spent"]
-    out["pct_used"] = np.where(out["budget_amount"] > 0, out["spent"] / out["budget_amount"], np.nan)
-    out = out.sort_values("pct_used", ascending=False)
-    return out
-
 def cc_cycle_for_date(d: date, closing_day: int):
-    # ciclo do cartão: de (closing+1 do mês anterior) até closing do mês atual (aproximação simples)
-    # Ex: fechamento dia 10. Ciclo: 11 do mês anterior -> 10 do mês atual.
-    closing_this_month = date(d.year, d.month, min(closing_day, 28))
+    closing_this_month = date(d.year, d.month, min(int(closing_day), 28))
     if d <= closing_this_month:
         cycle_end = closing_this_month
         cycle_start = add_months(closing_this_month, -1) + timedelta(days=1)
@@ -187,66 +62,130 @@ def cc_cycle_for_date(d: date, closing_day: int):
         cycle_start = closing_this_month + timedelta(days=1)
     return cycle_start, cycle_end
 
-# ---------------- UI ----------------
-ensure_storage()
+# ---------------- LOADERS ----------------
+@st.cache_data(ttl=30)
+def load_transactions():
+    df = pd.DataFrame(ws_tx.get_all_records())
+    if df.empty:
+        return df
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
+    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
+    df["type"] = df["type"].astype(str).str.lower()
+    df = df[df["type"].isin(DEFAULT_TYPES)].copy()
+    # garante colunas opcionais
+    for col in ["payment_method", "notes", "fixed"]:
+        if col not in df.columns:
+            df[col] = ""
+    return df
 
-st.title("💸 Dashboard Financeiro Pessoal (Streamlit)")
+@st.cache_data(ttl=30)
+def load_budgets():
+    df = pd.DataFrame(ws_budget.get_all_records())
+    if df.empty:
+        return df
+    df["budget_amount"] = pd.to_numeric(df["budget_amount"], errors="coerce").fillna(0.0)
+    df["month"] = df["month"].astype(str)
+    df["category"] = df["category"].astype(str)
+    return df
+
+@st.cache_data(ttl=30)
+def load_credit_cards():
+    df = pd.DataFrame(ws_cc.get_all_records())
+    if df.empty:
+        return df
+    df["closing_day"] = pd.to_numeric(df.get("closing_day", 10), errors="coerce").fillna(10).astype(int)
+    df["due_day"] = pd.to_numeric(df.get("due_day", 17), errors="coerce").fillna(17).astype(int)
+    df["limit"] = pd.to_numeric(df.get("limit", 0), errors="coerce").fillna(0.0)
+    df["name"] = df["name"].astype(str)
+    return df
+
+# ---------------- WRITERS ----------------
+def append_row(ws, values):
+    ws.append_row(values, value_input_option="USER_ENTERED")
+
+def add_transaction(row: dict):
+    append_row(ws_tx, [
+        str(row["date"]),
+        row["type"],
+        row["category"],
+        row["account"],
+        row["description"],
+        float(row["amount"]),
+        str(row.get("fixed", "")),
+        row.get("payment_method", ""),
+        row.get("notes", "")
+    ])
+    load_transactions.clear()  # limpa cache
+
+def upsert_budget(month: str, category: str, budget_amount: float):
+    dfb = load_budgets()
+    if dfb.empty:
+        append_row(ws_budget, [month, category, float(budget_amount)])
+        load_budgets.clear()
+        return
+
+    # procura linha existente (1-based no Sheets). Header na linha 1.
+    records = ws_budget.get_all_records()
+    for i, r in enumerate(records, start=2):
+        if str(r.get("month")) == month and str(r.get("category")) == category:
+            ws_budget.update(f"C{i}", [[float(budget_amount)]])
+            load_budgets.clear()
+            return
+
+    append_row(ws_budget, [month, category, float(budget_amount)])
+    load_budgets.clear()
+
+# ---------------- CALCS ----------------
+def compute_kpis(df: pd.DataFrame, start: date, end: date):
+    if df.empty:
+        return 0.0, 0.0, 0.0, 0.0
+    mask = (df["date"] >= start) & (df["date"] <= end)
+    dff = df.loc[mask].copy()
+    income = dff.loc[dff["type"] == "income", "amount"].sum()
+    expense = dff.loc[dff["type"] == "expense", "amount"].sum()
+    net = income - expense
+
+    df_sorted = df.sort_values("date").copy()
+    df_sorted["signed"] = np.where(df_sorted["type"] == "income", df_sorted["amount"], -df_sorted["amount"])
+    df_sorted["balance"] = df_sorted["signed"].cumsum()
+    df_end = df_sorted[df_sorted["date"] <= end]
+    balance_end = float(df_end["balance"].iloc[-1]) if not df_end.empty else 0.0
+    return float(income), float(expense), float(net), float(balance_end)
+
+def compute_budget_status(df: pd.DataFrame, dfb: pd.DataFrame, month: str):
+    if df.empty or dfb.empty:
+        return pd.DataFrame(columns=["category", "budget_amount", "spent", "remaining", "pct_used"])
+    budgets = dfb[dfb["month"] == month].copy()
+    if budgets.empty:
+        return pd.DataFrame(columns=["category", "budget_amount", "spent", "remaining", "pct_used"])
+
+    dfm = df.copy()
+    dfm["month"] = pd.to_datetime(dfm["date"]).dt.to_period("M").astype(str)
+    dfm = dfm[(dfm["month"] == month) & (dfm["type"] == "expense")]
+
+    spent = dfm.groupby("category", as_index=False)["amount"].sum().rename(columns={"amount": "spent"})
+    out = budgets.merge(spent, on="category", how="left")
+    out["spent"] = out["spent"].fillna(0.0)
+    out["remaining"] = out["budget_amount"] - out["spent"]
+    out["pct_used"] = np.where(out["budget_amount"] > 0, out["spent"] / out["budget_amount"], np.nan)
+    return out.sort_values("pct_used", ascending=False)
+
+# ---------------- UI ----------------
+st.title("💸 Dashboard Financeiro Pessoal (Google Sheets)")
+
+df = load_transactions()
 
 with st.sidebar:
-    st.header("⚙️ Configurações & Importação")
+    st.header("📌 Filtros")
 
-    df = load_transactions()
-
-    uploaded = st.file_uploader("Importar CSV de lançamentos", type=["csv"])
-    if uploaded is not None:
-        df_up = pd.read_csv(uploaded)
-        missing = [c for c in REQUIRED_COLS if c not in df_up.columns]
-        if missing:
-            st.error(f"CSV sem colunas obrigatórias: {missing}")
-        else:
-            # normaliza
-            df_up = df_up.copy()
-            df_up["date"] = pd.to_datetime(df_up["date"], errors="coerce").dt.date
-            df_up["amount"] = pd.to_numeric(df_up["amount"], errors="coerce").fillna(0.0)
-            df_up["type"] = df_up["type"].astype(str).str.lower()
-            for col in ["fixed", "payment_method", "notes"]:
-                if col not in df_up.columns:
-                    df_up[col] = ""
-            df = pd.concat([df, df_up], ignore_index=True).dropna(subset=["date"])
-            save_transactions(df)
-            st.success("Importado e salvo em data/transactions.csv")
-
-    if st.button("🔄 Usar dados de exemplo"):
-        today = date.today()
-        sample = pd.DataFrame([
-            {"date": today.replace(day=1), "type": "income", "category": "Salário", "account": "Conta Principal",
-             "description": "Salário", "amount": 4500, "fixed": True, "payment_method": "Transferência", "notes": ""},
-            {"date": today.replace(day=2), "type": "expense", "category": "Moradia", "account": "Conta Principal",
-             "description": "Aluguel", "amount": 1400, "fixed": True, "payment_method": "Pix", "notes": ""},
-            {"date": today.replace(day=5), "type": "expense", "category": "Mercado", "account": "Conta Principal",
-             "description": "Compras do mês", "amount": 650, "fixed": False, "payment_method": "Débito", "notes": ""},
-            {"date": today.replace(day=8), "type": "expense", "category": "Transporte", "account": "Conta Principal",
-             "description": "Combustível", "amount": 220, "fixed": False, "payment_method": "Crédito", "notes": "Cartão Principal"},
-            {"date": today.replace(day=12), "type": "expense", "category": "Lazer", "account": "Conta Principal",
-             "description": "Restaurante", "amount": 180, "fixed": False, "payment_method": "Crédito", "notes": "Cartão Principal"},
-        ])
-        # adaptar colunas
-        sample["fixed"] = sample["fixed"].astype(bool)
-        df = pd.concat([df, sample], ignore_index=True)
-        save_transactions(df)
-        st.success("Dados de exemplo adicionados!")
-
-    st.divider()
-
-    st.subheader("📌 Filtros")
     if df.empty:
+        st.warning("Sua aba 'transactions' está vazia. Adicione um lançamento na aba 'Novo lançamento'.")
         min_date = date.today().replace(day=1)
         max_date = date.today()
     else:
         min_date = min(df["date"])
         max_date = max(df["date"])
 
-    # default: mês atual
     start_default = date.today().replace(day=1)
     end_default = date.today()
 
@@ -255,11 +194,11 @@ with st.sidebar:
 
     type_filter = st.multiselect("Tipo", options=["income", "expense"], default=["income", "expense"])
 
-    categories = sorted(set(df["category"].dropna().astype(str).tolist() + DEFAULT_CATEGORIES))
-    cat_filter = st.multiselect("Categorias", options=categories, default=[])
+    categories_all = sorted(set(df.get("category", pd.Series([])).dropna().astype(str).tolist() + DEFAULT_CATEGORIES))
+    cat_filter = st.multiselect("Categorias", options=categories_all, default=[])
 
-    accounts = sorted(set(df["account"].dropna().astype(str).tolist() + DEFAULT_ACCOUNTS))
-    acc_filter = st.multiselect("Contas", options=accounts, default=[])
+    accounts_all = sorted(set(df.get("account", pd.Series([])).dropna().astype(str).tolist() + DEFAULT_ACCOUNTS))
+    acc_filter = st.multiselect("Contas", options=accounts_all, default=[])
 
 # Apply filters
 df_view = df.copy()
@@ -272,7 +211,6 @@ if not df_view.empty:
     if acc_filter:
         df_view = df_view[df_view["account"].isin(acc_filter)]
 
-# Tabs
 tab_dash, tab_add, tab_budget, tab_cc, tab_data = st.tabs(
     ["📊 Dashboard", "➕ Novo lançamento", "🎯 Orçamentos", "💳 Cartão de crédito", "🗂️ Dados"]
 )
@@ -281,43 +219,71 @@ with tab_dash:
     col1, col2, col3, col4 = st.columns(4)
     income, expense, net, balance_end = compute_kpis(df, start, end)
 
-    col1.metric("💰 Saldo (até fim do período)", f"R$ {balance_end:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-    col2.metric("📈 Entradas", f"R$ {income:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-    col3.metric("📉 Saídas", f"R$ {expense:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-    col4.metric("🧾 Resultado", f"R$ {net:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    fmt = lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    col1.metric("💰 Saldo (até fim do período)", fmt(balance_end))
+    col2.metric("📈 Entradas", fmt(income))
+    col3.metric("📉 Saídas", fmt(expense))
+    col4.metric("🧾 Resultado", fmt(net))
 
     st.divider()
 
     cA, cB = st.columns(2)
     with cA:
         st.subheader("📈 Saldo acumulado (no período)")
-        chart_balance(df, start, end)
+        if df.empty:
+            st.info("Sem lançamentos.")
+        else:
+            dff = df.sort_values("date").copy()
+            dff["signed"] = np.where(dff["type"] == "income", dff["amount"], -dff["amount"])
+            dff["balance"] = dff["signed"].cumsum()
+            mask = (dff["date"] >= start) & (dff["date"] <= end)
+            dplot = dff.loc[mask, ["date", "balance"]]
+            if dplot.empty:
+                st.info("Sem dados no período.")
+            else:
+                st.line_chart(dplot.set_index("date"))
 
     with cB:
         st.subheader("📊 Entradas x Saídas por mês")
-        chart_monthly(df, start, end)
+        if df_view.empty:
+            st.info("Sem dados no período.")
+        else:
+            dff = df_view.copy()
+            dff["month"] = pd.to_datetime(dff["date"]).dt.to_period("M").astype(str)
+            pivot = dff.pivot_table(index="month", columns="type", values="amount", aggfunc="sum", fill_value=0).reset_index()
+            pivot = pivot.sort_values("month")
+            st.bar_chart(pivot.set_index("month"))
 
     st.divider()
 
     cC, cD = st.columns(2)
     with cC:
         st.subheader("🧩 Gastos por categoria (período)")
-        chart_categories(df, start, end, only_expenses=True)
+        if df_view.empty:
+            st.info("Sem dados.")
+        else:
+            dff = df_view[df_view["type"] == "expense"]
+            if dff.empty:
+                st.info("Sem despesas no período.")
+            else:
+                cat = dff.groupby("category", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
+                st.dataframe(cat, use_container_width=True)
+                st.bar_chart(cat.set_index("category"))
 
     with cD:
         st.subheader("📌 Últimos lançamentos (período)")
         st.dataframe(df_view.sort_values("date", ascending=False), use_container_width=True)
 
 with tab_add:
-    st.subheader("➕ Adicionar lançamento")
+    st.subheader("➕ Adicionar lançamento (salva na planilha)")
     with st.form("add_tx"):
         c1, c2, c3 = st.columns(3)
         with c1:
             d = st.date_input("Data", value=date.today())
             t = st.selectbox("Tipo", options=["expense", "income"])
         with c2:
-            cat = st.selectbox("Categoria", options=sorted(set(categories)))
-            acc = st.selectbox("Conta", options=sorted(set(accounts)))
+            cat = st.selectbox("Categoria", options=categories_all)
+            acc = st.selectbox("Conta", options=accounts_all)
         with c3:
             amt = st.number_input("Valor (R$)", min_value=0.0, step=10.0, format="%.2f")
 
@@ -328,65 +294,52 @@ with tab_add:
             fixed = st.checkbox("Despesa fixa?", value=False)
         with c6:
             pay = st.selectbox("Forma de pagamento", options=["Pix", "Débito", "Crédito", "Boleto", "Transferência", "Dinheiro", "Outro"])
+
         notes = st.text_input("Observações (ex: nome do cartão)", value="")
 
-        submitted = st.form_submit_button("Salvar")
+        submitted = st.form_submit_button("Salvar na planilha")
         if submitted:
-            new_row = {
+            add_transaction({
                 "date": d,
                 "type": t,
                 "category": cat,
                 "account": acc,
                 "description": desc,
                 "amount": float(amt),
-                "fixed": bool(fixed),
+                "fixed": "sim" if fixed else "não",
                 "payment_method": pay,
                 "notes": notes
-            }
-            df2 = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-            save_transactions(df2)
-            st.success("Lançamento salvo!")
+            })
+            st.success("Lançamento salvo na planilha ✅")
             st.rerun()
 
 with tab_budget:
-    st.subheader("🎯 Orçamentos por categoria (mês)")
+    st.subheader("🎯 Orçamentos por categoria (mês) — salva na planilha")
     dfb = load_budgets()
 
     month = st.selectbox(
         "Mês (YYYY-MM)",
-        options=sorted(set(dfb["month"].tolist() + [month_key(date.today())])),
-        index=0 if month_key(date.today()) not in set(dfb["month"].tolist()) else sorted(set(dfb["month"].tolist() + [month_key(date.today())])).index(month_key(date.today()))
+        options=sorted(set(dfb["month"].tolist() + [month_key(date.today())])) if not dfb.empty else [month_key(date.today())]
     )
 
-    st.caption("Defina quanto você quer gastar por categoria nesse mês. O app calcula quanto já foi gasto e quanto falta.")
+    st.caption("Define orçamento por categoria no mês. O app calcula gasto e restante.")
 
     c1, c2 = st.columns(2)
     with c1:
-        cat_b = st.selectbox("Categoria", options=sorted(set(categories)))
+        cat_b = st.selectbox("Categoria", options=categories_all, key="budget_cat")
     with c2:
-        bud = st.number_input("Orçamento (R$)", min_value=0.0, step=50.0, format="%.2f")
+        bud = st.number_input("Orçamento (R$)", min_value=0.0, step=50.0, format="%.2f", key="budget_val")
 
-    if st.button("💾 Salvar orçamento"):
-        row = {"month": month, "category": cat_b, "budget_amount": float(bud)}
-        if dfb.empty:
-            dfb2 = pd.DataFrame([row])
-        else:
-            dfb2 = dfb.copy()
-            # upsert
-            mask = (dfb2["month"] == month) & (dfb2["category"] == cat_b)
-            dfb2 = dfb2[~mask]
-            dfb2 = pd.concat([dfb2, pd.DataFrame([row])], ignore_index=True)
-        save_budgets(dfb2)
-        st.success("Orçamento salvo!")
+    if st.button("💾 Salvar / Atualizar orçamento"):
+        upsert_budget(month, cat_b, float(bud))
+        st.success("Orçamento salvo/atualizado ✅")
         st.rerun()
 
     st.divider()
-
     status = compute_budget_status(load_transactions(), load_budgets(), month)
     if status.empty:
         st.info("Sem orçamentos definidos para este mês.")
     else:
-        # alertas
         over = status[status["remaining"] < 0]
         if not over.empty:
             st.error("⚠️ Categorias estouradas:")
@@ -398,46 +351,20 @@ with tab_cc:
     st.subheader("💳 Cartão de crédito (faturas por fechamento)")
     dfc = load_credit_cards()
 
-    st.caption("Configure seus cartões e o app estima a fatura usando lançamentos com 'Forma de pagamento = Crédito' e 'Observações = nome do cartão'.")
-
-    with st.expander("⚙️ Configurar cartões", expanded=False):
-        st.dataframe(dfc, use_container_width=True)
-        st.write("Edite o CSV em `data/credit_cards.csv` ou use o formulário abaixo.")
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            cc_name = st.text_input("Nome do cartão", value="Cartão Principal")
-        with c2:
-            closing = st.number_input("Dia de fechamento (1-28)", min_value=1, max_value=28, value=10)
-        with c3:
-            due = st.number_input("Dia de vencimento (1-28)", min_value=1, max_value=28, value=17)
-        with c4:
-            limit = st.number_input("Limite (R$)", min_value=0.0, step=100.0, value=5000.0, format="%.2f")
-
-        if st.button("💾 Salvar cartão"):
-            row = {"name": cc_name, "closing_day": int(closing), "due_day": int(due), "limit": float(limit)}
-            dfc2 = dfc.copy()
-            dfc2 = dfc2[dfc2["name"] != cc_name]
-            dfc2 = pd.concat([dfc2, pd.DataFrame([row])], ignore_index=True)
-            save_credit_cards(dfc2)
-            st.success("Cartão salvo!")
-            st.rerun()
+    st.caption("Aba 'credit_cards' deve ter colunas: name, closing_day, due_day, limit")
 
     if dfc.empty:
-        st.info("Cadastre pelo menos 1 cartão.")
+        st.info("Cadastre pelo menos 1 cartão na aba 'credit_cards'.")
     else:
         card = st.selectbox("Selecionar cartão", options=dfc["name"].tolist())
         row = dfc[dfc["name"] == card].iloc[0]
         closing_day = int(row["closing_day"])
         limit = float(row["limit"])
 
-        # pega gastos no crédito com notes == card
         tx = load_transactions()
-        txc = tx[(tx["type"] == "expense") & (tx.get("payment_method", "") == "Crédito")].copy()
-        if "notes" not in txc.columns:
-            txc["notes"] = ""
+        txc = tx[(tx["type"] == "expense") & (tx["payment_method"].astype(str) == "Crédito")].copy()
         txc = txc[txc["notes"].astype(str).str.strip().str.lower() == str(card).strip().lower()]
 
-        # fatura atual (ciclo baseado em hoje)
         cycle_start, cycle_end = cc_cycle_for_date(date.today(), closing_day)
         fatura = txc[(txc["date"] >= cycle_start) & (txc["date"] <= cycle_end)]
         total = fatura["amount"].sum()
@@ -453,15 +380,7 @@ with tab_cc:
         st.dataframe(fatura.sort_values("date", ascending=False), use_container_width=True)
 
 with tab_data:
-    st.subheader("🗂️ Base completa")
+    st.subheader("🗂️ Base completa (transactions)")
     st.dataframe(load_transactions().sort_values("date", ascending=False), use_container_width=True)
 
-    st.caption("Arquivos locais usados pelo app:")
-    st.code(f"{TX_PATH}\n{BUDGET_PATH}\n{CC_PATH}")
-
-    st.download_button(
-        "⬇️ Baixar transactions.csv",
-        data=pd.read_csv(TX_PATH).to_csv(index=False).encode("utf-8"),
-        file_name="transactions.csv",
-        mime="text/csv"
-    )
+    st.caption("Se der erro de aba não encontrada, renomeie as abas para: transactions, budgets, credit_cards.")
