@@ -8,7 +8,7 @@ from google.oauth2.service_account import Credentials
 # =================================================
 # CONFIG
 # =================================================
-st.set_page_config(page_title="Dashboard Financeiro Pessoal", layout="wide")
+st.set_page_config(page_title="Dashboard Financeiro", layout="wide")
 
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -39,6 +39,16 @@ sheet = client.open_by_key(SHEET_ID)
 ws_lanc = sheet.worksheet("lancamentos")
 ws_metas = sheet.worksheet("metas")
 ws_prog = sheet.worksheet("metas_progresso")
+
+# =================================================
+# HELPERS
+# =================================================
+def safe(v):
+    if v is None:
+        return ""
+    if isinstance(v, float) and (np.isnan(v) or np.isinf(v)):
+        return 0
+    return v
 
 # =================================================
 # LOADERS
@@ -72,7 +82,9 @@ def load_metas():
         return pd.DataFrame(columns=["id", "descricao", "tipo", "valor_meta", "inicio", "fim"])
 
     df.columns = df.columns.str.strip().str.lower()
+
     df["id"] = pd.to_numeric(df["id"], errors="coerce").astype(int)
+    df["descricao"] = df["descricao"].astype(str)
     df["tipo"] = df["tipo"].astype(str).str.strip().str.lower()
     df["valor_meta"] = pd.to_numeric(df["valor_meta"], errors="coerce").fillna(0.0)
     df["inicio"] = pd.to_datetime(df["inicio"], dayfirst=True, errors="coerce").dt.date
@@ -101,7 +113,9 @@ def proximo_id_meta(df):
 def salvar_meta(meta):
     ws_metas.append_row(
         [
-            meta["id"], meta["descricao"], meta["tipo"],
+            meta["id"],
+            meta["descricao"],
+            meta["tipo"],
             meta["valor_meta"],
             meta["inicio"].strftime("%d/%m/%Y"),
             meta["fim"].strftime("%d/%m/%Y")
@@ -131,7 +145,6 @@ def kpis_pagamento(df, ini, fim):
 # =================================================
 def calcular_meta(meta, df):
     base = df[(df["data"] >= meta["inicio"]) & (df["data"] <= meta["fim"])]
-
     if meta["tipo"] == "receita":
         return base[base["tipo"] == "receita"]["valor"].sum()
     if meta["tipo"] == "gasto":
@@ -144,19 +157,29 @@ def calcular_meta(meta, df):
     return 0.0
 
 def atualizar_metas_progresso(df, metas):
-    header = ["id","descricao","valor_meta","valor_atual","percentual","status","atualizado_em"]
     ws_prog.clear()
-    ws_prog.append_row(header)
+    ws_prog.append_row(
+        ["id","descricao","valor_meta","valor_atual","percentual","status","atualizado_em"]
+    )
+
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M")
 
     for _, m in metas.iterrows():
-        atual = calcular_meta(m, df)
-        pct = min(atual / m["valor_meta"], 1) if m["valor_meta"] > 0 else 0
+        atual = safe(calcular_meta(m, df))
+        alvo = safe(m["valor_meta"])
+
+        pct = atual / alvo if alvo > 0 else 0
+        pct = max(0, min(pct, 1))
+
         ws_prog.append_row(
             [
-                m["id"], m["descricao"], m["valor_meta"],
-                round(atual, 2), round(pct * 100, 1),
+                safe(m["id"]),
+                safe(m["descricao"]),
+                safe(alvo),
+                safe(round(atual, 2)),
+                safe(round(pct * 100, 1)),
                 "Concluída" if pct >= 1 else "Em andamento",
-                datetime.now().strftime("%d/%m/%Y %H:%M")
+                agora
             ],
             value_input_option="USER_ENTERED"
         )
@@ -235,23 +258,30 @@ with tab_meta:
         fim_m = st.date_input("Fim", format="DD/MM/YYYY")
 
         if st.form_submit_button("Salvar meta"):
-            if not desc or valor <= 0 or fim_m < ini_m:
+            if not desc.strip() or valor <= 0 or fim_m < ini_m:
                 st.error("Preencha todos os campos corretamente.")
             else:
                 salvar_meta({
-                    "id": novo_id, "descricao": desc, "tipo": tipo,
-                    "valor_meta": valor, "inicio": ini_m, "fim": fim_m
+                    "id": novo_id,
+                    "descricao": desc,
+                    "tipo": tipo,
+                    "valor_meta": float(valor),
+                    "inicio": ini_m,
+                    "fim": fim_m
                 })
-                st.success("Meta criada")
+                st.success("Meta criada com sucesso")
                 st.rerun()
 
     st.divider()
 
     prog = pd.DataFrame(ws_prog.get_all_records())
-    for _, r in prog.iterrows():
-        st.markdown(f"**{r['descricao']}**")
-        st.progress(r["percentual"] / 100)
-        st.caption(f"R$ {r['valor_atual']} / R$ {r['valor_meta']} — {r['status']}")
+    if not prog.empty:
+        for _, r in prog.iterrows():
+            st.markdown(f"**{r['descricao']}**")
+            st.progress(float(r["percentual"]) / 100)
+            st.caption(
+                f"R$ {r['valor_atual']} / R$ {r['valor_meta']} — {r['status']}"
+            )
 
 # ---------------- DADOS ----------------
 with tab_data:
