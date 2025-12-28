@@ -39,25 +39,26 @@ ws_lanc = sheet.worksheet("lancamentos")
 ws_meta = sheet.worksheet("metas")
 
 # =================================================
-# LOADERS
+# LOADERS (ROBUSTOS)
 # =================================================
 @st.cache_data(ttl=30)
 def load_lancamentos():
     records = ws_lanc.get_all_records()
     df = pd.DataFrame(records)
+
+    if df.empty:
+        return pd.DataFrame(columns=COLUNAS_LANC)
+
     df.columns = df.columns.str.strip().str.lower()
 
     for col in COLUNAS_LANC:
         if col not in df.columns:
             df[col] = None
 
-    if df.empty:
-        return df.copy()
-
     df["data"] = pd.to_datetime(df["data"], dayfirst=True, errors="coerce").dt.date
     df["valor"] = pd.to_numeric(df["valor"], errors="coerce").fillna(0.0)
-    df["tipo"] = df["tipo"].astype(str).str.lower()
-    df["pagamento"] = df["pagamento"].astype(str).str.lower()
+    df["tipo"] = df["tipo"].astype(str).str.strip().str.lower()
+    df["pagamento"] = df["pagamento"].astype(str).str.strip().str.lower()
 
     df = df.dropna(subset=["data"])
     df = df[df["tipo"].isin(["receita", "despesa"])]
@@ -76,7 +77,7 @@ def load_metas():
     df["valor_meta"] = pd.to_numeric(df["valor_meta"], errors="coerce").fillna(0.0)
     df["inicio"] = pd.to_datetime(df["inicio"], dayfirst=True, errors="coerce").dt.date
     df["fim"] = pd.to_datetime(df["fim"], dayfirst=True, errors="coerce").dt.date
-    df["tipo"] = df["tipo"].astype(str).str.lower()
+    df["tipo"] = df["tipo"].astype(str).str.strip().str.lower()
 
     return df.copy()
 
@@ -86,7 +87,7 @@ def load_metas():
 def salvar_lancamento(d):
     ws_lanc.append_row(
         [
-            d["data"].strftime("%d/%m/%Y"),
+            d["data"].strftime("%d/%m/%Y"),  # DATA BR
             d["tipo"],
             d["categoria"],
             d["conta"],
@@ -104,9 +105,6 @@ def salvar_lancamento(d):
 # KPIs
 # =================================================
 def calcular_kpis(df, inicio, fim):
-    if df.empty:
-        return 0.0, 0.0, 0.0
-
     base = df[(df["data"] >= inicio) & (df["data"] <= fim)]
     receita = base[base["tipo"] == "receita"]["valor"].sum()
     despesa = base[base["tipo"] == "despesa"]["valor"].sum()
@@ -114,9 +112,6 @@ def calcular_kpis(df, inicio, fim):
     return receita, despesa, saldo
 
 def calcular_kpis_pagamento(df, inicio, fim):
-    if df.empty:
-        return 0, 0, 0, 0
-
     base = df[
         (df["data"] >= inicio) &
         (df["data"] <= fim) &
@@ -127,13 +122,12 @@ def calcular_kpis_pagamento(df, inicio, fim):
     avista = base[base["pagamento"].isin(["pix", "débito", "debito"])]["valor"].sum()
 
     total = cartao + avista
-    pct_cartao = (cartao / total * 100) if total > 0 else 0
+    pct_cartao = (cartao / total * 100) if total > 0 else 0.0
 
-    return avista, cartao, pct_cartao, cartao
+    return avista, cartao, pct_cartao
 
 def progresso_meta(meta, df):
-    periodo = (df["data"] >= meta["inicio"]) & (df["data"] <= meta["fim"])
-    base = df[periodo]
+    base = df[(df["data"] >= meta["inicio"]) & (df["data"] <= meta["fim"])]
 
     if meta["tipo"] == "receita":
         return base[base["tipo"] == "receita"]["valor"].sum()
@@ -146,7 +140,7 @@ def progresso_meta(meta, df):
         d = base[base["tipo"] == "despesa"]["valor"].sum()
         return r - d
 
-    return 0
+    return 0.0
 
 # =================================================
 # APP
@@ -161,10 +155,11 @@ with st.sidebar:
 
     if df.empty:
         inicio = fim = date.today()
-        st.info("Nenhum lançamento ainda.")
+        st.warning("Nenhum lançamento encontrado.")
     else:
-        inicio = st.date_input("Início", df["data"].min(), format="DD/MM/YYYY")
-        fim = st.date_input("Fim", df["data"].max(), format="DD/MM/YYYY")
+        datas = df["data"]
+        inicio = st.date_input("Início", datas.min(), min_value=datas.min(), max_value=datas.max(), format="DD/MM/YYYY")
+        fim = st.date_input("Fim", datas.max(), min_value=datas.min(), max_value=datas.max(), format="DD/MM/YYYY")
 
 # ---------------- TABS ----------------
 tab_dash, tab_add, tab_meta, tab_data = st.tabs(
@@ -182,13 +177,12 @@ with tab_dash:
 
     st.divider()
 
-    avista, cartao, pct_cartao, fatura = calcular_kpis_pagamento(df, inicio, fim)
+    avista, cartao, pct_cartao = calcular_kpis_pagamento(df, inicio, fim)
 
-    c4, c5, c6, c7 = st.columns(4)
-    c4.metric("⚡ À Vista (PIX/Débito)", f"R$ {avista:,.2f}")
-    c5.metric("💳 Cartão", f"R$ {cartao:,.2f}")
+    c4, c5, c6 = st.columns(3)
+    c4.metric("⚡ À Vista (PIX / Débito)", f"R$ {avista:,.2f}")
+    c5.metric("💳 Cartão de Crédito", f"R$ {cartao:,.2f}")
     c6.metric("% no Cartão", f"{pct_cartao:.1f}%")
-    c7.metric("🧾 Fatura Estimada", f"R$ {fatura:,.2f}")
 
     if pct_cartao > 40:
         st.warning("⚠️ Mais de 40% dos gastos estão no cartão.")
@@ -199,10 +193,13 @@ with tab_dash:
         dff = df.sort_values("data")
         dff["mov"] = np.where(dff["tipo"] == "receita", dff["valor"], -dff["valor"])
         dff["saldo"] = dff["mov"].cumsum()
+        st.subheader("📈 Saldo acumulado")
         st.line_chart(dff.set_index("data")["saldo"])
 
 # ---------------- LANÇAMENTO ----------------
 with tab_add:
+    st.subheader("➕ Novo lançamento")
+
     with st.form("add"):
         data_l = st.date_input("Data", format="DD/MM/YYYY")
         tipo = st.selectbox("Tipo", ["receita", "despesa"])
@@ -226,7 +223,7 @@ with tab_add:
                 "pagamento": pagamento,
                 "observacao": observacao
             })
-            st.success("Lançamento salvo ✅")
+            st.success("Lançamento salvo com sucesso ✅")
             st.rerun()
 
 # ---------------- METAS ----------------
@@ -234,7 +231,7 @@ with tab_meta:
     st.subheader("🎯 Metas")
 
     with st.form("add_meta"):
-        desc = st.text_input("Descrição")
+        desc = st.text_input("Descrição da meta")
         tipo_meta = st.selectbox("Tipo", ["receita", "gasto", "economia"])
         valor_meta = st.number_input("Valor da meta", min_value=0.0, format="%.2f")
         inicio_m = st.date_input("Início", format="DD/MM/YYYY")
@@ -270,4 +267,5 @@ with tab_meta:
 
 # ---------------- DADOS ----------------
 with tab_data:
+    st.subheader("📋 Lançamentos")
     st.dataframe(df.sort_values("data", ascending=False), use_container_width=True)
