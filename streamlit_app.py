@@ -8,7 +8,7 @@ from google.oauth2.service_account import Credentials
 # =================================================
 # CONFIG
 # =================================================
-st.set_page_config(page_title="Dashboard Financeiro Pessoal", layout="wide")
+st.set_page_config(page_title="Dashboard Financeiro", layout="wide")
 
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -39,12 +39,11 @@ ws_lanc = sheet.worksheet("lancamentos")
 ws_meta = sheet.worksheet("metas")
 
 # =================================================
-# LOADERS (ROBUSTOS + DATA BR)
+# LOADERS
 # =================================================
 @st.cache_data(ttl=30)
 def load_lancamentos():
     records = ws_lanc.get_all_records()
-
     df = pd.DataFrame(records)
     df.columns = df.columns.str.strip().str.lower()
 
@@ -55,15 +54,10 @@ def load_lancamentos():
     if df.empty:
         return df.copy()
 
-    # DATA: aceita BR (DD/MM/YYYY) e ISO (YYYY-MM-DD)
-    df["data"] = pd.to_datetime(
-        df["data"],
-        dayfirst=True,
-        errors="coerce"
-    ).dt.date
-
+    df["data"] = pd.to_datetime(df["data"], dayfirst=True, errors="coerce").dt.date
     df["valor"] = pd.to_numeric(df["valor"], errors="coerce").fillna(0.0)
     df["tipo"] = df["tipo"].astype(str).str.lower()
+    df["pagamento"] = df["pagamento"].astype(str).str.lower()
 
     df = df.dropna(subset=["data"])
     df = df[df["tipo"].isin(["receita", "despesa"])]
@@ -87,12 +81,12 @@ def load_metas():
     return df.copy()
 
 # =================================================
-# WRITE (GRAVA DATA EM BR NA PLANILHA)
+# WRITE
 # =================================================
 def salvar_lancamento(d):
     ws_lanc.append_row(
         [
-            d["data"].strftime("%d/%m/%Y"),  # ✅ DATA BR
+            d["data"].strftime("%d/%m/%Y"),
             d["tipo"],
             d["categoria"],
             d["conta"],
@@ -114,15 +108,30 @@ def calcular_kpis(df, inicio, fim):
         return 0.0, 0.0, 0.0
 
     base = df[(df["data"] >= inicio) & (df["data"] <= fim)]
-    receita = base.loc[base["tipo"] == "receita", "valor"].sum()
-    despesa = base.loc[base["tipo"] == "despesa", "valor"].sum()
+    receita = base[base["tipo"] == "receita"]["valor"].sum()
+    despesa = base[base["tipo"] == "despesa"]["valor"].sum()
     saldo = receita - despesa
     return receita, despesa, saldo
 
-def progresso_meta(meta, df):
+def calcular_kpis_pagamento(df, inicio, fim):
     if df.empty:
-        return 0.0
+        return 0, 0, 0, 0
 
+    base = df[
+        (df["data"] >= inicio) &
+        (df["data"] <= fim) &
+        (df["tipo"] == "despesa")
+    ]
+
+    cartao = base[base["pagamento"].str.contains("crédito")]["valor"].sum()
+    avista = base[base["pagamento"].isin(["pix", "débito", "debito"])]["valor"].sum()
+
+    total = cartao + avista
+    pct_cartao = (cartao / total * 100) if total > 0 else 0
+
+    return avista, cartao, pct_cartao, cartao
+
+def progresso_meta(meta, df):
     periodo = (df["data"] >= meta["inicio"]) & (df["data"] <= meta["fim"])
     base = df[periodo]
 
@@ -137,7 +146,7 @@ def progresso_meta(meta, df):
         d = base[base["tipo"] == "despesa"]["valor"].sum()
         return r - d
 
-    return 0.0
+    return 0
 
 # =================================================
 # APP
@@ -152,15 +161,14 @@ with st.sidebar:
 
     if df.empty:
         inicio = fim = date.today()
-        st.info("Nenhum lançamento válido ainda.")
+        st.info("Nenhum lançamento ainda.")
     else:
-        datas = df["data"].dropna()
-        inicio = st.date_input("Início", datas.min(), format="DD/MM/YYYY")
-        fim = st.date_input("Fim", datas.max(), format="DD/MM/YYYY")
+        inicio = st.date_input("Início", df["data"].min(), format="DD/MM/YYYY")
+        fim = st.date_input("Fim", df["data"].max(), format="DD/MM/YYYY")
 
 # ---------------- TABS ----------------
 tab_dash, tab_add, tab_meta, tab_data = st.tabs(
-    ["📊 Dashboard", "➕ Novo lançamento", "🎯 Metas", "🗂️ Dados"]
+    ["📊 Dashboard", "➕ Lançamento", "🎯 Metas", "🗂️ Dados"]
 )
 
 # ---------------- DASHBOARD ----------------
@@ -174,29 +182,36 @@ with tab_dash:
 
     st.divider()
 
+    avista, cartao, pct_cartao, fatura = calcular_kpis_pagamento(df, inicio, fim)
+
+    c4, c5, c6, c7 = st.columns(4)
+    c4.metric("⚡ À Vista (PIX/Débito)", f"R$ {avista:,.2f}")
+    c5.metric("💳 Cartão", f"R$ {cartao:,.2f}")
+    c6.metric("% no Cartão", f"{pct_cartao:.1f}%")
+    c7.metric("🧾 Fatura Estimada", f"R$ {fatura:,.2f}")
+
+    if pct_cartao > 40:
+        st.warning("⚠️ Mais de 40% dos gastos estão no cartão.")
+
+    st.divider()
+
     if not df.empty:
         dff = df.sort_values("data")
         dff["mov"] = np.where(dff["tipo"] == "receita", dff["valor"], -dff["valor"])
         dff["saldo"] = dff["mov"].cumsum()
         st.line_chart(dff.set_index("data")["saldo"])
 
-# ---------------- NOVO LANÇAMENTO ----------------
+# ---------------- LANÇAMENTO ----------------
 with tab_add:
-    st.subheader("➕ Novo lançamento")
-
     with st.form("add"):
-        data_l = st.date_input(
-            "Data",
-            value=date.today(),
-            format="DD/MM/YYYY"  # 👈 INPUT BR
-        )
+        data_l = st.date_input("Data", format="DD/MM/YYYY")
         tipo = st.selectbox("Tipo", ["receita", "despesa"])
         categoria = st.text_input("Categoria")
         conta = st.text_input("Conta")
         descricao = st.text_input("Descrição")
         valor = st.number_input("Valor", min_value=0.0, format="%.2f")
         fixo = st.selectbox("Fixo?", ["sim", "não"])
-        pagamento = st.text_input("Pagamento")
+        pagamento = st.selectbox("Pagamento", ["Pix", "Débito", "Crédito"])
         observacao = st.text_input("Observação")
 
         if st.form_submit_button("Salvar"):
@@ -211,18 +226,42 @@ with tab_add:
                 "pagamento": pagamento,
                 "observacao": observacao
             })
-            st.success("Lançamento salvo na planilha (DD/MM/AAAA) ✅")
+            st.success("Lançamento salvo ✅")
             st.rerun()
 
 # ---------------- METAS ----------------
 with tab_meta:
     st.subheader("🎯 Metas")
 
-    df_metas = load_metas()
-    if df_metas.empty:
+    with st.form("add_meta"):
+        desc = st.text_input("Descrição")
+        tipo_meta = st.selectbox("Tipo", ["receita", "gasto", "economia"])
+        valor_meta = st.number_input("Valor da meta", min_value=0.0, format="%.2f")
+        inicio_m = st.date_input("Início", format="DD/MM/YYYY")
+        fim_m = st.date_input("Fim", format="DD/MM/YYYY")
+
+        if st.form_submit_button("Salvar meta"):
+            ws_meta.append_row(
+                [
+                    desc,
+                    tipo_meta,
+                    float(valor_meta),
+                    inicio_m.strftime("%d/%m/%Y"),
+                    fim_m.strftime("%d/%m/%Y")
+                ],
+                value_input_option="USER_ENTERED"
+            )
+            load_metas.clear()
+            st.success("Meta salva ✅")
+            st.rerun()
+
+    st.divider()
+
+    metas = load_metas()
+    if metas.empty:
         st.info("Nenhuma meta cadastrada.")
     else:
-        for _, meta in df_metas.iterrows():
+        for _, meta in metas.iterrows():
             atual = progresso_meta(meta, df)
             pct = min(atual / meta["valor_meta"], 1)
             st.markdown(f"### {meta['descricao']}")
@@ -231,5 +270,4 @@ with tab_meta:
 
 # ---------------- DADOS ----------------
 with tab_data:
-    st.subheader("📋 Lançamentos")
     st.dataframe(df.sort_values("data", ascending=False), use_container_width=True)
