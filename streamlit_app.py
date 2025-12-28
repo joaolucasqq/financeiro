@@ -8,7 +8,7 @@ from google.oauth2.service_account import Credentials
 # =================================================
 # CONFIG
 # =================================================
-st.set_page_config(page_title="Financeiro Pessoal", layout="wide")
+st.set_page_config(page_title="Dashboard Financeiro Pessoal", layout="wide")
 
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -39,13 +39,13 @@ ws_lanc = sheet.worksheet("lancamentos")
 ws_meta = sheet.worksheet("metas")
 
 # =================================================
-# LOADERS (100% SEGUROS)
+# LOADERS (ROBUSTOS)
 # =================================================
 @st.cache_data(ttl=30)
 def load_lancamentos():
     records = ws_lanc.get_all_records()
 
-    # SEMPRE cria DataFrame com colunas
+    # cria DF mesmo vazio
     df = pd.DataFrame(records)
     df.columns = df.columns.str.strip().str.lower()
 
@@ -54,10 +54,15 @@ def load_lancamentos():
             df[col] = None
 
     if df.empty:
-        return df
+        return df.copy()
 
-    # conversões seguras
-    df["data"] = pd.to_datetime(df["data"], errors="coerce").dt.date
+    # ✅ DATA: aceita BR (DD/MM/YYYY) e ISO (YYYY-MM-DD)
+    df["data"] = pd.to_datetime(
+        df["data"],
+        dayfirst=True,
+        errors="coerce"
+    ).dt.date
+
     df["valor"] = pd.to_numeric(df["valor"], errors="coerce").fillna(0.0)
     df["tipo"] = df["tipo"].astype(str).str.lower()
 
@@ -77,32 +82,34 @@ def load_metas():
     df.columns = df.columns.str.strip().str.lower()
 
     df["valor_meta"] = pd.to_numeric(df["valor_meta"], errors="coerce").fillna(0.0)
-    df["inicio"] = pd.to_datetime(df["inicio"], errors="coerce").dt.date
-    df["fim"] = pd.to_datetime(df["fim"], errors="coerce").dt.date
+    df["inicio"] = pd.to_datetime(df["inicio"], dayfirst=True, errors="coerce").dt.date
+    df["fim"] = pd.to_datetime(df["fim"], dayfirst=True, errors="coerce").dt.date
     df["tipo"] = df["tipo"].astype(str).str.lower()
 
     return df.copy()
 
 # =================================================
-# WRITER
+# WRITE
 # =================================================
 def salvar_lancamento(d):
-    ws_lanc.append_row([
-        str(d["data"]),
-        d["tipo"],
-        d["categoria"],
-        d["conta"],
-        d["descricao"],
-        float(d["valor"]),
-        d["fixo"],
-        d["pagamento"],
-        d["observacao"]
-    ], value_input_option="USER_ENTERED")
-
+    ws_lanc.append_row(
+        [
+            str(d["data"]),
+            d["tipo"],
+            d["categoria"],
+            d["conta"],
+            d["descricao"],
+            float(d["valor"]),
+            d["fixo"],
+            d["pagamento"],
+            d["observacao"]
+        ],
+        value_input_option="USER_ENTERED"
+    )
     load_lancamentos.clear()
 
 # =================================================
-# CÁLCULOS
+# KPIs
 # =================================================
 def calcular_kpis(df, inicio, fim):
     if df.empty:
