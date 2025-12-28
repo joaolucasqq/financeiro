@@ -39,13 +39,12 @@ ws_lanc = sheet.worksheet("lancamentos")
 ws_meta = sheet.worksheet("metas")
 
 # =================================================
-# LOADERS (ROBUSTOS)
+# LOADERS (ROBUSTOS + DATA BR)
 # =================================================
 @st.cache_data(ttl=30)
 def load_lancamentos():
     records = ws_lanc.get_all_records()
 
-    # cria DF mesmo vazio
     df = pd.DataFrame(records)
     df.columns = df.columns.str.strip().str.lower()
 
@@ -56,7 +55,7 @@ def load_lancamentos():
     if df.empty:
         return df.copy()
 
-    # ✅ DATA: aceita BR (DD/MM/YYYY) e ISO (YYYY-MM-DD)
+    # DATA: aceita BR (DD/MM/YYYY) e ISO (YYYY-MM-DD)
     df["data"] = pd.to_datetime(
         df["data"],
         dayfirst=True,
@@ -66,7 +65,6 @@ def load_lancamentos():
     df["valor"] = pd.to_numeric(df["valor"], errors="coerce").fillna(0.0)
     df["tipo"] = df["tipo"].astype(str).str.lower()
 
-    # remove linhas inválidas
     df = df.dropna(subset=["data"])
     df = df[df["tipo"].isin(["receita", "despesa"])]
 
@@ -89,12 +87,12 @@ def load_metas():
     return df.copy()
 
 # =================================================
-# WRITE
+# WRITE (GRAVA DATA EM BR NA PLANILHA)
 # =================================================
 def salvar_lancamento(d):
     ws_lanc.append_row(
         [
-            str(d["data"]),
+            d["data"].strftime("%d/%m/%Y"),  # ✅ DATA BR
             d["tipo"],
             d["categoria"],
             d["conta"],
@@ -157,8 +155,8 @@ with st.sidebar:
         st.info("Nenhum lançamento válido ainda.")
     else:
         datas = df["data"].dropna()
-        inicio = st.date_input("Início", datas.min())
-        fim = st.date_input("Fim", datas.max())
+        inicio = st.date_input("Início", datas.min(), format="DD/MM/YYYY")
+        fim = st.date_input("Fim", datas.max(), format="DD/MM/YYYY")
 
 # ---------------- TABS ----------------
 tab_dash, tab_add, tab_meta, tab_data = st.tabs(
@@ -187,7 +185,11 @@ with tab_add:
     st.subheader("➕ Novo lançamento")
 
     with st.form("add"):
-        data_l = st.date_input("Data", value=date.today())
+        data_l = st.date_input(
+            "Data",
+            value=date.today(),
+            format="DD/MM/YYYY"  # 👈 INPUT BR
+        )
         tipo = st.selectbox("Tipo", ["receita", "despesa"])
         categoria = st.text_input("Categoria")
         conta = st.text_input("Conta")
@@ -209,7 +211,7 @@ with tab_add:
                 "pagamento": pagamento,
                 "observacao": observacao
             })
-            st.success("Lançamento salvo na planilha ✅")
+            st.success("Lançamento salvo na planilha (DD/MM/AAAA) ✅")
             st.rerun()
 
 # ---------------- METAS ----------------
