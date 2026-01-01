@@ -5,7 +5,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # ================= CONFIG =================
-st.set_page_config(page_title="Dashboard Financeiro", layout="wide")
+st.set_page_config(page_title="Dashboard Financeiro & Metas", layout="wide")
 
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -13,11 +13,6 @@ SCOPE = [
 ]
 
 SHEET_ID = "1sFMHJSj7zbpLn73n7QILqmGG3CLL98rXTm9Et9QKFMA"
-
-COL_LANC = [
-    "data", "tipo", "categoria", "conta",
-    "descricao", "valor", "fixo", "pagamento", "observacao"
-]
 
 # ================= GOOGLE =================
 @st.cache_resource
@@ -40,202 +35,166 @@ ws_prog = sheet.worksheet("metas_progresso")
 def load_lancamentos():
     df = pd.DataFrame(ws_lanc.get_all_records())
     if df.empty:
-        return pd.DataFrame(columns=COL_LANC)
+        return df
 
     df.columns = df.columns.str.lower().str.strip()
     df["data"] = pd.to_datetime(df["data"], dayfirst=True, errors="coerce").dt.date
     df["valor"] = pd.to_numeric(df["valor"], errors="coerce").fillna(0.0)
     df["tipo"] = df["tipo"].str.lower().str.strip()
-    df["pagamento"] = df["pagamento"].str.lower().str.strip()
-
-    df = df.dropna(subset=["data"])
-    df = df[df["tipo"].isin(["receita", "despesa"])]
-
-    return df.copy()
+    return df.dropna(subset=["data"])
 
 @st.cache_data(ttl=30)
 def load_metas():
     df = pd.DataFrame(ws_metas.get_all_records())
     if df.empty:
-        return pd.DataFrame(columns=["id","descricao","tipo","valor_meta","inicio","fim"])
+        return df
 
     df.columns = df.columns.str.lower().str.strip()
     df["id"] = df["id"].astype(int)
-    df["tipo"] = df["tipo"].str.lower().str.strip()
     df["valor_meta"] = pd.to_numeric(df["valor_meta"], errors="coerce").fillna(0.0)
+    df["valor_manual"] = pd.to_numeric(df["valor_manual"], errors="coerce").fillna(0.0)
     df["inicio"] = pd.to_datetime(df["inicio"], dayfirst=True).dt.date
     df["fim"] = pd.to_datetime(df["fim"], dayfirst=True).dt.date
-
-    return df.copy()
+    return df
 
 # ================= WRITE =================
 def salvar_lancamento(d):
-    ws_lanc.append_rows([[
+    ws_lanc.append_rows([[ 
         d["data"].strftime("%d/%m/%Y"),
-        d["tipo"],
-        d["categoria"],
-        d["conta"],
-        d["descricao"],
-        float(d["valor"]),
-        d["fixo"],
-        d["pagamento"],
-        d["observacao"]
+        d["tipo"], d["categoria"], d["conta"],
+        d["descricao"], d["valor"],
+        d["fixo"], d["pagamento"], d["observacao"]
     ]], value_input_option="USER_ENTERED")
     load_lancamentos.clear()
 
 def salvar_meta(m):
-    ws_metas.append_rows([[
-        str(m["id"]),
-        m["descricao"],
-        m["tipo"],
-        str(m["valor_meta"]),
+    ws_metas.append_rows([[ 
+        m["id"], m["descricao"], m["tipo_metrica"], m["unidade"],
+        m["valor_meta"],
         m["inicio"].strftime("%d/%m/%Y"),
-        m["fim"].strftime("%d/%m/%Y")
+        m["fim"].strftime("%d/%m/%Y"),
+        0
     ]], value_input_option="USER_ENTERED")
     load_metas.clear()
 
-# ================= METAS / KPIs =================
-def calcular_meta(meta, df):
-    base = df[(df["data"] >= meta["inicio"]) & (df["data"] <= meta["fim"])]
+def atualizar_valor_manual(meta_id, valor):
+    cell = ws_metas.find(str(meta_id))
+    ws_metas.update_cell(cell.row, 8, valor)  # coluna valor_manual
+    load_metas.clear()
 
-    if meta["tipo"] == "receita":
-        return base[base["tipo"] == "receita"]["valor"].sum()
+# ================= METAS =================
+def calcular_progresso(meta, df_lanc):
+    hoje = date.today()
+    valor_atual = 0
 
-    if meta["tipo"] == "gasto":
-        return base[base["tipo"] == "despesa"]["valor"].sum()
+    if meta["tipo_metrica"] == "financeira":
+        base = df_lanc[
+            (df_lanc["data"] >= meta["inicio"]) &
+            (df_lanc["data"] <= meta["fim"]) &
+            (df_lanc["tipo"] == "receita")
+        ]
+        valor_atual = base["valor"].sum()
 
-    if meta["tipo"] == "economia":
-        r = base[base["tipo"] == "receita"]["valor"].sum()
-        d = base[base["tipo"] == "despesa"]["valor"].sum()
-        return r - d
+    elif meta["tipo_metrica"] in ["quantidade", "percentual", "tempo"]:
+        valor_atual = meta["valor_manual"]
 
-    return 0.0
+    elif meta["tipo_metrica"] == "binaria":
+        valor_atual = 1 if meta["valor_manual"] >= 1 else 0
 
-def atualizar_metas_progresso(df, metas):
-    ws_prog.clear()
-    ws_prog.append_rows([[
-        "id","descricao","valor_meta",
-        "valor_atual","percentual",
-        "status","atualizado_em"
-    ]], value_input_option="RAW")
+    pct = min(valor_atual / meta["valor_meta"], 1) if meta["valor_meta"] > 0 else 0
 
-    agora = datetime.now().strftime("%d/%m/%Y %H:%M")
-    linhas = []
+    total_dias = (meta["fim"] - meta["inicio"]).days + 1
+    dias_passados = max(1, min((hoje - meta["inicio"]).days + 1, total_dias))
+    ritmo = valor_atual / dias_passados
+    projecao = ritmo * total_dias
 
-    for _, m in metas.iterrows():
-        atual = float(calcular_meta(m, df))
-        alvo = float(m["valor_meta"]) if m["valor_meta"] > 0 else 0.0
-        pct = min(atual / alvo, 1) if alvo > 0 else 0
-
-        linhas.append([
-            str(m["id"]),
-            m["descricao"],
-            f"{alvo:.2f}",
-            f"{atual:.2f}",
-            f"{pct*100:.1f}",
-            "Concluída" if pct >= 1 else "Em andamento",
-            agora
-        ])
-
-    if linhas:
-        ws_prog.append_rows(linhas, value_input_option="RAW")
+    return valor_atual, pct, projecao
 
 # ================= APP =================
-st.title("💸 Dashboard Financeiro")
+st.title("📊 Dashboard Financeiro & Metas")
 
-df = load_lancamentos()
-metas = load_metas()
+df_lanc = load_lancamentos()
+df_metas = load_metas()
 
-if not metas.empty:
-    atualizar_metas_progresso(df, metas)
-
-# ================= TABS =================
 tab_dash, tab_lanc, tab_meta = st.tabs(
     ["📊 Dashboard", "➕ Lançamentos", "🎯 Metas"]
 )
 
 # -------- DASHBOARD --------
 with tab_dash:
-    st.subheader("Resumo financeiro")
-    st.dataframe(df.sort_values("data", ascending=False), use_container_width=True)
+    st.dataframe(df_lanc.sort_values("data", ascending=False), use_container_width=True)
 
 # -------- LANÇAMENTOS --------
 with tab_lanc:
-    sub_fin, sub_meta = st.tabs(
-        ["💸 Lançamentos Financeiros", "🎯 Lançamentos de Metas"]
-    )
+    sub_fin, sub_meta = st.tabs(["💸 Financeiro", "🎯 Metas"])
 
-    # ===== SUB-ABA: LANÇAMENTOS FINANCEIROS =====
     with sub_fin:
-        st.subheader("💸 Novo lançamento financeiro")
-
-        with st.form("lanc_fin"):
-            data = st.date_input("Data", format="DD/MM/YYYY")
-            tipo = st.selectbox("Tipo", ["receita", "despesa"])
-            categoria = st.text_input("Categoria")
-            conta = st.text_input("Conta")
-            descricao = st.text_input("Descrição")
-            valor = st.number_input("Valor", min_value=0.0)
-            fixo = st.selectbox("Fixo?", ["sim", "não"])
-            pagamento = st.selectbox("Pagamento", ["pix", "débito", "crédito"])
-            observacao = st.text_input("Observação")
-
-            if st.form_submit_button("Salvar lançamento"):
+        with st.form("fin"):
+            d = st.date_input("Data", format="DD/MM/YYYY")
+            t = st.selectbox("Tipo", ["receita", "despesa"])
+            desc = st.text_input("Descrição")
+            val = st.number_input("Valor", min_value=0.0)
+            if st.form_submit_button("Salvar"):
                 salvar_lancamento({
-                    "data": data,
-                    "tipo": tipo,
-                    "categoria": categoria,
-                    "conta": conta,
-                    "descricao": descricao,
-                    "valor": valor,
-                    "fixo": fixo,
-                    "pagamento": pagamento,
-                    "observacao": observacao
+                    "data": d, "tipo": t, "categoria": "",
+                    "conta": "", "descricao": desc,
+                    "valor": val, "fixo": "",
+                    "pagamento": "", "observacao": ""
                 })
-                st.success("Lançamento financeiro salvo ✅")
                 st.rerun()
 
-    # ===== SUB-ABA: LANÇAMENTOS DE METAS =====
     with sub_meta:
-        st.subheader("🎯 Novo lançamento de meta")
-
-        with st.form("lanc_meta"):
-            novo_id = 1 if metas.empty else metas["id"].max() + 1
-            descricao = st.text_input("Descrição da meta")
-            tipo = st.selectbox("Tipo da meta", ["receita", "gasto", "economia"])
+        with st.form("meta"):
+            novo_id = 1 if df_metas.empty else df_metas["id"].max() + 1
+            desc = st.text_input("Descrição da meta")
+            tipo = st.selectbox(
+                "Tipo da meta",
+                ["financeira", "quantidade", "percentual", "tempo", "binaria"]
+            )
+            unidade = st.text_input("Unidade (ex: R$, dias, %, horas)")
             valor = st.number_input("Valor da meta", min_value=1.0)
-            inicio = st.date_input("Início", format="DD/MM/YYYY")
+            ini = st.date_input("Início", format="DD/MM/YYYY")
             fim = st.date_input("Fim", format="DD/MM/YYYY")
 
             if st.form_submit_button("Salvar meta"):
-                if not descricao.strip() or fim < inicio:
-                    st.error("Preencha os dados corretamente.")
-                else:
-                    salvar_meta({
-                        "id": novo_id,
-                        "descricao": descricao,
-                        "tipo": tipo,
-                        "valor_meta": valor,
-                        "inicio": inicio,
-                        "fim": fim
-                    })
-                    st.success("Meta criada com sucesso 🎯")
-                    st.rerun()
+                salvar_meta({
+                    "id": novo_id,
+                    "descricao": desc,
+                    "tipo_metrica": tipo,
+                    "unidade": unidade,
+                    "valor_meta": valor,
+                    "inicio": ini,
+                    "fim": fim
+                })
+                st.rerun()
 
-
-# -------- METAS (PROGRESSO) --------
+# -------- METAS (VISUAL) --------
 with tab_meta:
-    st.subheader("📊 Progresso das metas")
+    st.subheader("🎯 Acompanhamento de Metas")
 
-    prog = pd.DataFrame(ws_prog.get_all_records())
-
-    if prog.empty:
+    if df_metas.empty:
         st.info("Nenhuma meta cadastrada.")
     else:
-        for _, r in prog.iterrows():
-            st.markdown(f"### 🎯 {r['descricao']}")
-            st.progress(float(r["percentual"]) / 100)
-            st.caption(
-                f"R$ {r['valor_atual']} / R$ {r['valor_meta']} — {r['status']}"
-            )
+        for _, m in df_metas.iterrows():
+            atual, pct, proj = calcular_progresso(m, df_lanc)
 
+            st.divider()
+            st.markdown(f"## 🎯 {m['descricao']}")
+            st.caption(f"{m['tipo_metrica'].capitalize()} • Meta: {m['valor_meta']} {m['unidade']}")
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Atual", f"{atual:.2f} {m['unidade']}")
+            c2.metric("Progresso", f"{pct*100:.1f}%")
+            c3.metric("Projeção", f"{proj:.2f} {m['unidade']}")
+
+            st.progress(pct)
+
+            if m["tipo_metrica"] != "financeira":
+                novo_valor = st.number_input(
+                    f"Atualizar progresso ({m['unidade']})",
+                    value=float(m["valor_manual"]),
+                    key=f"meta_{m['id']}"
+                )
+                if st.button("Salvar progresso", key=f"save_{m['id']}"):
+                    atualizar_valor_manual(m["id"], novo_valor)
+                    st.rerun()
