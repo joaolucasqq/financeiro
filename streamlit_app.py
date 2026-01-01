@@ -67,7 +67,7 @@ def salvar_lancamento(d):
         d["data"].strftime("%d/%m/%Y"),
         d["tipo"],
         d["descricao"],
-        d["valor"]
+        float(d["valor"])
     ]], value_input_option="USER_ENTERED")
     load_lancamentos.clear()
 
@@ -77,7 +77,7 @@ def salvar_meta(m):
         m["descricao"],
         m["tipo_metrica"],
         m["unidade"],
-        m["valor_meta"],
+        float(m["valor_meta"]),
         m["inicio"].strftime("%d/%m/%Y"),
         m["fim"].strftime("%d/%m/%Y"),
         0
@@ -90,13 +90,13 @@ def atualizar_valor_manual(meta_id, valor):
     load_metas.clear()
 
 # ================= METAS =================
-def label_tipo_meta(tipo):
+def label_meta(tipo):
     return {
-        "financeira": "💰 Meta Financeira",
-        "quantidade": "🔢 Meta de Quantidade",
-        "percentual": "📈 Meta Percentual",
-        "tempo": "⏱️ Meta de Tempo",
-        "binaria": "✅ Meta Binária"
+        "financeira": "💰 Financeira",
+        "quantidade": "🔢 Quantidade",
+        "percentual": "📈 Percentual",
+        "tempo": "⏱️ Tempo",
+        "binaria": "✅ Binária"
     }.get(tipo, "🎯 Meta")
 
 def calcular_progresso(meta, df_lanc):
@@ -133,66 +133,66 @@ tab_dash, tab_lanc, tab_meta = st.tabs(
 
 # ================= DASHBOARD =================
 with tab_dash:
-    st.subheader("📌 Últimos lançamentos")
-    st.dataframe(
-        df_lanc.sort_values("data", ascending=False),
-        use_container_width=True
-    )
+    st.subheader("📌 Últimos lançamentos financeiros")
+    if df_lanc.empty:
+        st.info("Nenhum lançamento ainda.")
+    else:
+        st.dataframe(
+            df_lanc.sort_values("data", ascending=False),
+            use_container_width=True
+        )
 
 # ================= LANÇAMENTOS =================
 with tab_lanc:
-    sub_fin, sub_meta = st.tabs(["💸 Financeiro", "🎯 Metas"])
+    st.subheader("💸 Novo lançamento financeiro")
 
-    # --- FINANCEIRO ---
-    with sub_fin:
-        st.subheader("Novo lançamento financeiro")
-        with st.form("fin"):
-            d = st.date_input("Data", format="DD/MM/YYYY")
-            t = st.selectbox("Tipo", ["receita", "despesa"])
-            desc = st.text_input("Descrição")
-            val = st.number_input("Valor", min_value=0.0)
+    with st.form("lanc_fin"):
+        d = st.date_input("Data", format="DD/MM/YYYY")
+        t = st.selectbox("Tipo", ["receita", "despesa"])
+        desc = st.text_input("Descrição")
+        val = st.number_input("Valor", min_value=0.0)
 
-            if st.form_submit_button("Salvar"):
-                salvar_lancamento({
-                    "data": d,
-                    "tipo": t,
-                    "descricao": desc,
-                    "valor": val
-                })
-                st.success("Lançamento salvo")
-                st.rerun()
+        if st.form_submit_button("Salvar lançamento"):
+            salvar_lancamento({
+                "data": d,
+                "tipo": t,
+                "descricao": desc,
+                "valor": val
+            })
+            st.success("Lançamento salvo")
+            st.rerun()
 
-    # --- METAS ---
-    with sub_meta:
-        st.subheader("Criar nova meta")
-        with st.form("meta"):
-            novo_id = 1 if df_metas.empty else df_metas["id"].max() + 1
-            desc = st.text_input("Descrição da meta")
-            tipo = st.selectbox(
-                "Tipo da meta",
-                ["financeira", "quantidade", "percentual", "tempo", "binaria"]
-            )
-            unidade = st.text_input("Unidade (ex: R$, dias, %, horas)")
-            valor = st.number_input("Valor da meta", min_value=1.0)
-            ini = st.date_input("Início", format="DD/MM/YYYY")
-            fim = st.date_input("Fim", format="DD/MM/YYYY")
-
-            if st.form_submit_button("Salvar meta"):
-                salvar_meta({
-                    "id": novo_id,
-                    "descricao": desc,
-                    "tipo_metrica": tipo,
-                    "unidade": unidade,
-                    "valor_meta": valor,
-                    "inicio": ini,
-                    "fim": fim
-                })
-                st.success("Meta criada")
-                st.rerun()
-
-# ================= METAS (VISUAL) =================
+# ================= METAS =================
 with tab_meta:
-    st.subheader("🎯 Acompanhamento de Metas")
+    st.subheader("🎯 Criar nova meta")
+
+    with st.form("nova_meta"):
+        novo_id = 1 if df_metas.empty else df_metas["id"].max() + 1
+        desc = st.text_input("Descrição da meta")
+        tipo = st.selectbox(
+            "Tipo da meta",
+            ["financeira", "quantidade", "percentual", "tempo", "binaria"]
+        )
+        unidade = st.text_input("Unidade (ex: R$, dias, %, horas)")
+        valor = st.number_input("Valor da meta", min_value=1.0)
+        ini = st.date_input("Início", format="DD/MM/YYYY")
+        fim = st.date_input("Fim", format="DD/MM/YYYY")
+
+        if st.form_submit_button("Salvar meta"):
+            salvar_meta({
+                "id": novo_id,
+                "descricao": desc,
+                "tipo_metrica": tipo,
+                "unidade": unidade,
+                "valor_meta": valor,
+                "inicio": ini,
+                "fim": fim
+            })
+            st.success("Meta criada")
+            st.rerun()
+
+    st.divider()
+    st.subheader("📈 Acompanhamento das metas")
 
     if df_metas.empty:
         st.info("Nenhuma meta cadastrada.")
@@ -203,18 +203,14 @@ with tab_meta:
             st.divider()
             st.markdown(f"## 🎯 {m['descricao']}")
             st.caption(
-                f"{label_tipo_meta(m['tipo_metrica'])} | "
-                f"Objetivo: {m['valor_meta']} {m['unidade']}"
+                f"{label_meta(m['tipo_metrica'])} • "
+                f"Meta: {m['valor_meta']} {m['unidade']}"
             )
 
             c1, c2, c3 = st.columns(3)
             c1.metric("Atual", f"{atual:.2f} {m['unidade']}")
             c2.metric("Progresso", f"{pct*100:.1f}%")
-
-            if m["tipo_metrica"] in ["financeira", "quantidade", "tempo"]:
-                c3.metric("Projeção", f"{proj:.2f} {m['unidade']}")
-            else:
-                c3.metric("Projeção", "—")
+            c3.metric("Projeção", f"{proj:.2f} {m['unidade']}")
 
             st.progress(pct)
 
