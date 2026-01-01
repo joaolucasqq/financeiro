@@ -192,31 +192,69 @@ with tab_lanc:
                     st.rerun()
 
 
-# ---------- METAS (VISUALIZAÇÃO) ----------
+# ---------- METAS (VISUALIZAÇÃO COMPLETA) ----------
 with tab_meta:
+    st.subheader("📈 Progresso das metas")
+
     if df_metas.empty:
         st.info("Nenhuma meta cadastrada.")
     else:
+        # carrega registros de progresso
+        df_reg = load_registros_metas(ws_reg)
+
         for _, m in df_metas.iterrows():
-            atual, pct, proj = calcular_progresso(m, df_lanc)
+            # progresso financeiro ou manual
+            if m["tipo_metrica"] == "financeira":
+                atual, pct, proj = calcular_progresso(m, df_lanc)
+                hist = pd.DataFrame()
+            else:
+                atual, hist = progresso_meta(m, df_reg)
+                pct = min(atual / m["valor_meta"], 1) if m["valor_meta"] > 0 else 0
+                proj = None
 
             st.divider()
-            st.subheader(m["descricao"])
-            st.caption(f"Meta: {m['valor_meta']} {m['unidade']}")
+            st.subheader(f"🎯 {m['descricao']}")
+            st.caption(
+                f"Meta: {m['valor_meta']} {m['unidade']} • "
+                f"Período: {m['inicio'].strftime('%d/%m/%Y')} → {m['fim'].strftime('%d/%m/%Y')}"
+            )
 
+            # KPIs
             c1, c2, c3 = st.columns(3)
             c1.metric("Atual", f"{atual:.2f} {m['unidade']}")
             c2.metric("Progresso", f"{pct*100:.1f}%")
-            c3.metric("Projeção", f"{proj:.2f} {m['unidade']}")
+            if proj is not None:
+                c3.metric("Projeção", f"{proj:.2f} {m['unidade']}")
+            else:
+                c3.metric("Restante", f"{m['valor_meta'] - atual:.2f} {m['unidade']}")
 
             st.progress(pct)
 
-            if m["tipo_metrica"] != "financeira":
-                novo = st.number_input(
-                    "Atualizar progresso",
-                    value=float(m["valor_manual"]),
-                    key=f"meta_{m['id']}"
+            # -------- HISTÓRICO / GRÁFICO --------
+            if not hist.empty:
+                st.caption("📊 Evolução do progresso")
+                st.line_chart(
+                    hist.set_index("data")[["acumulado"]],
+                    use_container_width=True
                 )
-                if st.button("Salvar progresso", key=f"save_{m['id']}"):
-                    atualizar_progresso(m["id"], novo)
-                    st.rerun()
+            elif m["tipo_metrica"] != "financeira":
+                st.info("Nenhum progresso registrado ainda.")
+
+            # -------- LANÇAR PROGRESSO --------
+            if m["tipo_metrica"] != "financeira":
+                with st.expander("➕ Lançar progresso"):
+                    with st.form(f"prog_{m['id']}"):
+                        d = st.date_input(
+                            "Data do progresso",
+                            value=date.today(),
+                            format="DD/MM/YYYY"
+                        )
+                        v = st.number_input(
+                            f"Valor do progresso ({m['unidade']})",
+                            min_value=0.0
+                        )
+
+                        if st.form_submit_button("Salvar progresso"):
+                            salvar_progresso_meta(m["id"], d, v)
+                            st.success("Progresso registrado ✅")
+                            st.rerun()
