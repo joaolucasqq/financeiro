@@ -37,8 +37,9 @@ ws_metas = sheet.worksheet("metas")
 @st.cache_data(ttl=30)
 def load_lancamentos():
     df = pd.DataFrame(ws_lanc.get_all_records())
+
     if df.empty:
-        return df
+        return pd.DataFrame(columns=["data", "tipo", "descricao", "valor"])
 
     df.columns = df.columns.str.lower().str.strip()
     df["data"] = pd.to_datetime(df["data"], dayfirst=True, errors="coerce").dt.date
@@ -59,6 +60,7 @@ def load_metas():
 
     df.columns = df.columns.str.lower().str.strip()
 
+    # blindagem total
     for col in [
         "id","descricao","tipo_metrica","unidade",
         "valor_meta","inicio","fim","valor_manual"
@@ -131,7 +133,7 @@ def calcular_progresso(meta, df_lanc):
 
     return atual, pct, projecao
 
-def gerar_evolucao_meta(meta, df_lanc):
+def gerar_evolucao(meta, df_lanc):
     datas = pd.date_range(meta["inicio"], meta["fim"], freq="D")
     df = pd.DataFrame({"data": datas})
 
@@ -155,20 +157,6 @@ def gerar_evolucao_meta(meta, df_lanc):
     df["meta"] = meta["valor_meta"]
     return df
 
-def grafico_meta(meta, df_lanc):
-    df = gerar_evolucao_meta(meta, df_lanc)
-    pct = min(df["acumulado"].iloc[-1] / meta["valor_meta"], 1) if meta["valor_meta"] > 0 else 0
-
-    st.progress(pct)
-
-    st.markdown("**Evolução no tempo**")
-    st.line_chart(df.set_index("data")[["acumulado"]])
-
-    st.markdown("**Projeção vs Meta**")
-    proj = df.set_index("data")[["acumulado"]].copy()
-    proj["Meta"] = meta["valor_meta"]
-    st.line_chart(proj)
-
 # ================= APP =================
 st.title("📊 Dashboard Financeiro & Metas")
 
@@ -181,11 +169,16 @@ tab_dash, tab_lanc, tab_meta = st.tabs(
 
 # -------- DASHBOARD --------
 with tab_dash:
-    st.subheader("Últimos lançamentos")
-    st.dataframe(df_lanc.sort_values("data", ascending=False), use_container_width=True)
+    st.subheader("Últimos lançamentos financeiros")
+    st.dataframe(
+        df_lanc.sort_values("data", ascending=False),
+        use_container_width=True
+    )
 
 # -------- LANÇAMENTOS --------
 with tab_lanc:
+    st.subheader("Novo lançamento financeiro")
+
     with st.form("lanc"):
         d = st.date_input("Data", format="DD/MM/YYYY")
         t = st.selectbox("Tipo", ["receita", "despesa"])
@@ -244,7 +237,14 @@ with tab_meta:
             f"Projeção: {proj:.2f}"
         )
 
-        grafico_meta(m, df_lanc)
+        df_evo = gerar_evolucao(m, df_lanc)
+        st.progress(pct)
+
+        st.line_chart(df_evo.set_index("data")[["acumulado"]])
+
+        proj_df = df_evo.set_index("data")[["acumulado"]].copy()
+        proj_df["Meta"] = m["valor_meta"]
+        st.line_chart(proj_df)
 
         if m["tipo_metrica"] != "financeira":
             novo_valor = st.number_input(
