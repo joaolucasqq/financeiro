@@ -120,45 +120,77 @@ with tab_dash:
     st.dataframe(df_lanc.sort_values("data", ascending=False), use_container_width=True)
 
 # ---------- LANÇAMENTOS ----------
+# ---------- LANÇAMENTOS ----------
 with tab_lanc:
-    sub_fin, sub_meta = st.tabs(["💸 Lançamentos Financeiros", "🎯 Lançamentos de Metas"])
+    st.subheader("➕ Lançamentos")
 
+    sub_fin, sub_meta = st.tabs(
+        ["💸 Lançamentos Financeiros", "🎯 Lançamentos de Metas"]
+    )
+
+    # ===== SUB ABA 1 — LANÇAMENTOS FINANCEIROS =====
     with sub_fin:
-        with st.form("fin"):
-            d = st.date_input("Data", format="DD/MM/YYYY")
-            t = st.selectbox("Tipo", ["receita", "despesa"])
-            desc = st.text_input("Descrição")
-            val = st.number_input("Valor", min_value=0.0)
-            if st.form_submit_button("Salvar"):
+        st.subheader("💸 Novo lançamento financeiro")
+
+        with st.form("form_lanc_fin"):
+            data = st.date_input("Data", format="DD/MM/YYYY")
+            tipo = st.selectbox("Tipo", ["receita", "despesa"])
+            categoria = st.text_input("Categoria")
+            conta = st.text_input("Conta")
+            descricao = st.text_input("Descrição")
+            valor = st.number_input("Valor", min_value=0.0)
+            fixo = st.selectbox("Fixo?", ["sim", "não"])
+            pagamento = st.selectbox("Pagamento", ["pix", "débito", "crédito"])
+            observacao = st.text_input("Observação")
+
+            if st.form_submit_button("Salvar lançamento"):
                 salvar_lancamento({
-                    "data": d, "tipo": t, "categoria": "",
-                    "conta": "", "descricao": desc,
-                    "valor": val, "fixo": "",
-                    "pagamento": "", "observacao": ""
+                    "data": data,
+                    "tipo": tipo,
+                    "categoria": categoria,
+                    "conta": conta,
+                    "descricao": descricao,
+                    "valor": valor,
+                    "fixo": fixo,
+                    "pagamento": pagamento,
+                    "observacao": observacao
                 })
+                st.success("Lançamento financeiro salvo ✅")
                 st.rerun()
 
+    # ===== SUB ABA 2 — LANÇAMENTOS DE METAS =====
     with sub_meta:
-        with st.form("meta"):
+        st.subheader("🎯 Criar nova meta")
+
+        with st.form("form_lanc_meta"):
             novo_id = 1 if df_metas.empty else df_metas["id"].max() + 1
-            desc = st.text_input("Descrição da meta")
-            tipo = st.selectbox("Tipo da meta", ["financeira","quantidade","percentual","tempo","binaria"])
+
+            descricao = st.text_input("Descrição da meta")
+            tipo = st.selectbox(
+                "Tipo da meta",
+                ["financeira", "quantidade", "percentual", "tempo", "binaria"]
+            )
             unidade = st.text_input("Unidade (R$, dias, %, horas)")
             valor = st.number_input("Valor da meta", min_value=1.0)
-            ini = st.date_input("Início", format="DD/MM/YYYY")
+            inicio = st.date_input("Início", format="DD/MM/YYYY")
             fim = st.date_input("Fim", format="DD/MM/YYYY")
 
             if st.form_submit_button("Salvar meta"):
-                salvar_meta({
-                    "id": novo_id,
-                    "descricao": desc,
-                    "tipo_metrica": tipo,
-                    "unidade": unidade,
-                    "valor_meta": valor,
-                    "inicio": ini,
-                    "fim": fim
-                })
-                st.rerun()
+                if not descricao.strip() or fim < inicio:
+                    st.error("Preencha os dados corretamente.")
+                else:
+                    salvar_meta({
+                        "id": novo_id,
+                        "descricao": descricao,
+                        "tipo_metrica": tipo,
+                        "unidade": unidade,
+                        "valor_meta": valor,
+                        "inicio": inicio,
+                        "fim": fim
+                    })
+                    st.success("Meta criada com sucesso 🎯")
+                    st.rerun()
+
 
 # ---------- METAS (VISUALIZAÇÃO) ----------
 with tab_meta:
