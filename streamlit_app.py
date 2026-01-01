@@ -72,9 +72,14 @@ def load_metas():
 def salvar_lancamento(d):
     ws_lanc.append_rows([[
         d["data"].strftime("%d/%m/%Y"),
-        d["tipo"], d["categoria"], d["conta"],
-        d["descricao"], float(d["valor"]),
-        d["fixo"], d["pagamento"], d["observacao"]
+        d["tipo"],
+        d["categoria"],
+        d["conta"],
+        d["descricao"],
+        float(d["valor"]),
+        d["fixo"],
+        d["pagamento"],
+        d["observacao"]
     ]], value_input_option="USER_ENTERED")
     load_lancamentos.clear()
 
@@ -89,17 +94,21 @@ def salvar_meta(m):
     ]], value_input_option="USER_ENTERED")
     load_metas.clear()
 
-# ================= KPIs =================
+# ================= METAS / KPIs =================
 def calcular_meta(meta, df):
     base = df[(df["data"] >= meta["inicio"]) & (df["data"] <= meta["fim"])]
+
     if meta["tipo"] == "receita":
         return base[base["tipo"] == "receita"]["valor"].sum()
+
     if meta["tipo"] == "gasto":
         return base[base["tipo"] == "despesa"]["valor"].sum()
+
     if meta["tipo"] == "economia":
         r = base[base["tipo"] == "receita"]["valor"].sum()
         d = base[base["tipo"] == "despesa"]["valor"].sum()
         return r - d
+
     return 0.0
 
 def atualizar_metas_progresso(df, metas):
@@ -110,8 +119,8 @@ def atualizar_metas_progresso(df, metas):
         "status","atualizado_em"
     ]], value_input_option="RAW")
 
-    linhas = []
     agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+    linhas = []
 
     for _, m in metas.iterrows():
         atual = float(calcular_meta(m, df))
@@ -140,47 +149,89 @@ metas = load_metas()
 if not metas.empty:
     atualizar_metas_progresso(df, metas)
 
+# ================= TABS =================
 tab_dash, tab_lanc, tab_meta = st.tabs(
-    ["📊 Dashboard", "➕ Lançamento", "🎯 Metas"]
+    ["📊 Dashboard", "➕ Lançamentos", "🎯 Metas"]
 )
 
-# -------- DASH --------
+# -------- DASHBOARD --------
 with tab_dash:
-    st.dataframe(df)
+    st.subheader("Resumo financeiro")
+    st.dataframe(df.sort_values("data", ascending=False), use_container_width=True)
 
-# -------- LANÇAMENTO --------
+# -------- LANÇAMENTOS --------
 with tab_lanc:
-    with st.form("lanc"):
-        d = st.date_input("Data", format="DD/MM/YYYY")
-        t = st.selectbox("Tipo", ["receita","despesa"])
-        desc = st.text_input("Descrição")
-        val = st.number_input("Valor", min_value=0.0)
-        if st.form_submit_button("Salvar"):
-            salvar_lancamento({
-                "data": d, "tipo": t,
-                "categoria": "", "conta": "",
-                "descricao": desc, "valor": val,
-                "fixo": "", "pagamento": "pix",
-                "observacao": ""
-            })
-            st.rerun()
+    sub_fin, sub_meta = st.tabs(
+        ["💸 Lançamentos Financeiros", "🎯 Lançamentos de Metas"]
+    )
 
-# -------- METAS --------
+    # FINANCEIRO
+    with sub_fin:
+        st.subheader("Novo lançamento financeiro")
+        with st.form("lanc_fin"):
+            d = st.date_input("Data", format="DD/MM/YYYY")
+            t = st.selectbox("Tipo", ["receita","despesa"])
+            cat = st.text_input("Categoria")
+            conta = st.text_input("Conta")
+            desc = st.text_input("Descrição")
+            val = st.number_input("Valor", min_value=0.0)
+            fixo = st.selectbox("Fixo?", ["sim","não"])
+            pag = st.selectbox("Pagamento", ["pix","débito","crédito"])
+            obs = st.text_input("Observação")
+
+            if st.form_submit_button("Salvar lançamento"):
+                salvar_lancamento({
+                    "data": d,
+                    "tipo": t,
+                    "categoria": cat,
+                    "conta": conta,
+                    "descricao": desc,
+                    "valor": val,
+                    "fixo": fixo,
+                    "pagamento": pag,
+                    "observacao": obs
+                })
+                st.success("Lançamento salvo ✅")
+                st.rerun()
+
+    # METAS (LANÇAMENTO)
+    with sub_meta:
+        st.subheader("Nova meta")
+        with st.form("lanc_meta"):
+            novo_id = 1 if metas.empty else metas["id"].max() + 1
+            desc = st.text_input("Descrição da meta")
+            tipo = st.selectbox("Tipo", ["receita","gasto","economia"])
+            valor = st.number_input("Valor da meta", min_value=1.0)
+            ini = st.date_input("Início", format="DD/MM/YYYY")
+            fim = st.date_input("Fim", format="DD/MM/YYYY")
+
+            if st.form_submit_button("Salvar meta"):
+                if not desc.strip() or fim < ini:
+                    st.error("Preencha os dados corretamente.")
+                else:
+                    salvar_meta({
+                        "id": novo_id,
+                        "descricao": desc,
+                        "tipo": tipo,
+                        "valor_meta": valor,
+                        "inicio": ini,
+                        "fim": fim
+                    })
+                    st.success("Meta criada com sucesso 🎯")
+                    st.rerun()
+
+# -------- METAS (PROGRESSO) --------
 with tab_meta:
-    with st.form("meta"):
-        desc = st.text_input("Descrição")
-        tipo = st.selectbox("Tipo", ["receita","gasto","economia"])
-        valor = st.number_input("Valor da meta", min_value=1.0)
-        ini = st.date_input("Início", format="DD/MM/YYYY")
-        fim = st.date_input("Fim", format="DD/MM/YYYY")
+    st.subheader("Progresso das metas")
 
-        if st.form_submit_button("Salvar meta"):
-            salvar_meta({
-                "id": 1 if metas.empty else metas["id"].max()+1,
-                "descricao": desc,
-                "tipo": tipo,
-                "valor_meta": valor,
-                "inicio": ini,
-                "fim": fim
-            })
-            st.rerun()
+    prog = pd.DataFrame(ws_prog.get_all_records())
+
+    if prog.empty:
+        st.info("Nenhuma meta cadastrada.")
+    else:
+        for _, r in prog.iterrows():
+            st.markdown(f"### 🎯 {r['descricao']}")
+            st.progress(float(r["percentual"]) / 100)
+            st.caption(
+                f"R$ {r['valor_atual']} / R$ {r['valor_meta']} — {r['status']}"
+            )
